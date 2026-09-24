@@ -555,6 +555,17 @@ func TestCreateApplication(t *testing.T) {
 				is.True(cmd.SkipRepoAccessCheck)
 			},
 		},
+		"from-local-dir with sub-path returns error": {
+			cmd: applicationCmd{
+				resourceCmd: resourceCmd{
+					Wait: false,
+					Name: "local-dir-subpath",
+				},
+				FromLocalDir: &localDir,
+				Git:          gitConfig{SubPath: "app"},
+			},
+			errorExpected: true,
+		},
 		"from-local-dir with non-existent directory returns error": {
 			cmd: applicationCmd{
 				resourceCmd: resourceCmd{

@@ -135,6 +135,11 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 	}
 
 	if cmd.FromLocalDir != nil {
+		// kpack may resolve a sub-path by fetching, which would consume the
+		// one-time repository before the build fetch.
+		if cmd.Git.SubPath != "" {
+			return fmt.Errorf("--git-sub-path can not be combined with --from-local-dir, point --from-local-dir at the sub directory instead")
+		}
 		cmd.Successf("📦", "uploading local directory %q to gitonce", *cmd.FromLocalDir)
 		upload, err := gitonce.UploadDirectory(ctx, *cmd.FromLocalDir, cmd.GitOnceURL)
 		if err != nil {

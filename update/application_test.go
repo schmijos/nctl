@@ -664,12 +664,24 @@ func TestApplication(t *testing.T) {
 					Name: existingApp.Name,
 				},
 				FromLocalDir: &localDir,
+				Git:          &gitConfig{SubPath: new("")},
 			},
 			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
 				is := require.New(t)
 				is.Equal("https://gitonce.example.com/gitonce/test-repo.git", updated.Spec.ForProvider.Git.URL)
+				is.Empty(updated.Spec.ForProvider.Git.SubPath)
 				is.True(cmd.SkipRepoAccessCheck)
 			},
+		},
+		"from-local-dir with existing sub-path returns error": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				resourceCmd: resourceCmd{
+					Name: existingApp.Name,
+				},
+				FromLocalDir: &localDir,
+			},
+			errorExpected: true,
 		},
 		"from-local-dir with non-existent directory returns error": {
 			orig: existingApp,

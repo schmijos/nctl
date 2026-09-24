@@ -148,6 +148,25 @@ func TestZipDirectoryContentsAreRelative(t *testing.T) {
 	require.Equal(t, filepath.Join("a", "b", "file.txt"), zr.File[0].Name)
 }
 
+func TestZipDirectoryKeepsExecutableBit(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "run"), []byte("#!/bin/sh"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "plain"), []byte("x"), 0600))
+
+	buf, err := zipDirectory(dir)
+	require.NoError(t, err)
+
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	modes := map[string]os.FileMode{}
+	for _, f := range zr.File {
+		modes[f.Name] = f.Mode() & 0111
+	}
+	require.Equal(t, map[string]os.FileMode{"run": 0100, "plain": 0}, modes)
+}
+
 func TestUploadDirectory(t *testing.T) {
 	t.Parallel()
 

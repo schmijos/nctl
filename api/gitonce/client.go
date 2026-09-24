@@ -99,12 +99,26 @@ func zipDirectory(dir string) (*bytes.Buffer, error) {
 	zw := zip.NewWriter(buf)
 
 	for _, rel := range files {
-		f, err := zw.Create(rel)
+		src, err := os.Open(filepath.Join(dir, rel))
 		if err != nil {
 			return nil, err
 		}
-		src, err := os.Open(filepath.Join(dir, rel))
+		info, err := src.Stat()
 		if err != nil {
+			src.Close()
+			return nil, err
+		}
+		// keep the executable bit so buildpacks can run bin/* and gradlew
+		hdr, err := zip.FileInfoHeader(info)
+		if err != nil {
+			src.Close()
+			return nil, err
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		hdr.Method = zip.Deflate
+		f, err := zw.CreateHeader(hdr)
+		if err != nil {
+			src.Close()
 			return nil, err
 		}
 		_, cpErr := io.Copy(f, src)

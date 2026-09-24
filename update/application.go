@@ -170,6 +170,12 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 		}
 		cmd.applyUpdates(app)
 
+		// kpack may resolve a sub-path by fetching, which would consume the
+		// one-time repository before the build fetch.
+		if cmd.FromLocalDir != nil && app.Spec.ForProvider.Git.SubPath != "" {
+			return fmt.Errorf("--from-local-dir can not be used with a git sub-path, clear it with --git-sub-path= or point --from-local-dir at the sub directory")
+		}
+
 		// if there was no change in the git config, we don't have
 		// anything to do anymore
 		if cmd.Git == nil || cmd.Git.empty() {
