@@ -99,32 +99,8 @@ func zipDirectory(dir string) (*bytes.Buffer, error) {
 	zw := zip.NewWriter(buf)
 
 	for _, rel := range files {
-		src, err := os.Open(filepath.Join(dir, rel))
-		if err != nil {
+		if err := addFile(zw, dir, rel); err != nil {
 			return nil, err
-		}
-		info, err := src.Stat()
-		if err != nil {
-			src.Close()
-			return nil, err
-		}
-		// keep the executable bit so buildpacks can run bin/* and gradlew
-		hdr, err := zip.FileInfoHeader(info)
-		if err != nil {
-			src.Close()
-			return nil, err
-		}
-		hdr.Name = filepath.ToSlash(rel)
-		hdr.Method = zip.Deflate
-		f, err := zw.CreateHeader(hdr)
-		if err != nil {
-			src.Close()
-			return nil, err
-		}
-		_, cpErr := io.Copy(f, src)
-		src.Close()
-		if cpErr != nil {
-			return nil, cpErr
 		}
 	}
 
@@ -133,6 +109,32 @@ func zipDirectory(dir string) (*bytes.Buffer, error) {
 	}
 
 	return buf, nil
+}
+
+// addFile writes dir/rel into zw, keeping the executable bit so buildpacks
+// can run bin/* and gradlew.
+func addFile(zw *zip.Writer, dir, rel string) error {
+	src, err := os.Open(filepath.Join(dir, rel))
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	hdr, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	hdr.Name = filepath.ToSlash(rel)
+	hdr.Method = zip.Deflate
+	f, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, src)
+	return err
 }
 
 // filesToZip returns the list of relative file paths to include in the zip.
@@ -160,7 +162,7 @@ func gitTrackedFiles(dir string) ([]string, error) {
 		return nil, fmt.Errorf("running git ls-files: %w", err)
 	}
 	var files []string
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line != "" {
 			files = append(files, line)
 		}
