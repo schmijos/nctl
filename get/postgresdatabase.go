@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type postgresDatabaseCmd struct{ databaseCmd }
+type postgresDatabaseCmd struct{ DatabaseCmd }
 
 func (cmd *postgresDatabaseCmd) Run(ctx context.Context, c *api.Client, get *Cmd) error {
 	return get.listPrint(ctx, c, cmd, api.MatchName(cmd.Name))
@@ -74,12 +74,17 @@ func (cmd *postgresDatabaseCmd) connectionString(mg resource.Managed, secrets ma
 
 // postgresConnectionString according to the PostgreSQL documentation:
 // https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
+// sslmode is require as there is no CA cert on disk to verify against.
 func postgresConnectionString(fqdn, user, db string, pw []byte) string {
+	q := url.Values{}
+	q.Set("sslmode", "require")
+
 	u := &url.URL{
-		Scheme: "postgres",
-		Host:   fqdn,
-		User:   url.UserPassword(user, string(pw)),
-		Path:   db,
+		Scheme:   "postgres",
+		Host:     fqdn,
+		User:     url.UserPassword(user, string(pw)),
+		Path:     db,
+		RawQuery: q.Encode(),
 	}
 
 	return u.String()

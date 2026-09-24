@@ -15,12 +15,12 @@ func TestPostgres(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		create  storage.PostgresParameters
-		update  postgresCmd
-		want    storage.PostgresParameters
-		wantErr bool
+		name   string
+		create storage.PostgresParameters
+		update postgresCmd
+		want   storage.PostgresParameters
 	}{
+		// Nothing to update leaves the instance as it is.
 		{
 			name: "simple",
 		},
@@ -37,15 +37,28 @@ func TestPostgres(t *testing.T) {
 		},
 		{
 			name: "sshKeys",
-			update: postgresCmd{
-				SSHKeys: []storage.SSHKey{
-					"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGG5/nnivrW4zLD4ANLclVT3y68GAg6NOA3HpzFLo5e test@test",
-				},
-			},
+			update: postgresCmd{DatabaseSSHKeysFlags: DatabaseSSHKeysFlags{
+				OptionalSSHKeysFlags: OptionalSSHKeysFlags{SSHKeys: []string{testPublicKeyA}},
+			}},
+			want: storage.PostgresParameters{SSHKeys: []storage.SSHKey{testPublicKeyA}},
+		},
+		{
+			// passing the flag an empty value removes the configured keys, that
+			// is the single empty entry Kong decodes --ssh-keys= into.
+			name:   "sshKeys-cleared",
+			create: storage.PostgresParameters{SSHKeys: []storage.SSHKey{testPublicKeyA}},
+			update: postgresCmd{DatabaseSSHKeysFlags: DatabaseSSHKeysFlags{
+				OptionalSSHKeysFlags: OptionalSSHKeysFlags{SSHKeys: []string{""}},
+			}},
+			want: storage.PostgresParameters{},
+		},
+		{
+			name:   "sshKeys-kept-when-unset",
+			create: storage.PostgresParameters{SSHKeys: []storage.SSHKey{testPublicKeyA}},
+			update: postgresCmd{KeepDailyBackups: new(5)},
 			want: storage.PostgresParameters{
-				SSHKeys: []storage.SSHKey{
-					"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGG5/nnivrW4zLD4ANLclVT3y68GAg6NOA3HpzFLo5e test@test",
-				},
+				SSHKeys:          []storage.SSHKey{testPublicKeyA},
+				KeepDailyBackups: new(5),
 			},
 		},
 		{
@@ -92,8 +105,8 @@ func TestPostgres(t *testing.T) {
 			}
 
 			updated := &storage.Postgres{}
-			if err := tt.update.Run(t.Context(), apiClient); (err != nil) != tt.wantErr {
-				t.Errorf("postgresCmd.Run() error = %v, wantErr %v", err, tt.wantErr)
+			if err := tt.update.Run(t.Context(), apiClient); err != nil {
+				t.Errorf("postgresCmd.Run() error = %v", err)
 			}
 			if err := apiClient.Get(t.Context(), api.ObjectName(created), updated); err != nil {
 				t.Fatalf("expected postgres to exist, got: %s", err)

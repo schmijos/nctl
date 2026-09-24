@@ -8,6 +8,7 @@ import (
 	storage "github.com/ninech/apis/storage/v1alpha1"
 	"github.com/ninech/nctl/api"
 	"github.com/ninech/nctl/create"
+	"github.com/ninech/nctl/internal/cli"
 
 	meta "github.com/ninech/apis/meta/v1alpha1"
 	"github.com/ninech/nctl/internal/test"
@@ -342,6 +343,8 @@ func TestBucket(t *testing.T) {
 				return &p
 			}(),
 		},
+		// The flags cancel each other out, leaving the spec untouched. Flags
+		// were given, so this is a no-op update rather than a usage error.
 		"lifecycle-policy-no-op": {
 			flags: []string{
 				"--lifecycle-policy=prefix=tmp/;expire-after-days=7;is-live=true",
@@ -788,6 +791,39 @@ func TestBucket(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBucketNoFlagsDoesNotUpdate(t *testing.T) {
+	t.Parallel()
+
+	is := require.New(t)
+
+	project := "proj-" + t.Name()
+	name := "bucket-" + t.Name()
+	orig := &storage.Bucket{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: project,
+		},
+	}
+
+	apiClient := test.SetupClient(
+		t,
+		test.WithDefaultProject(project),
+		test.WithObjects(orig),
+	)
+
+	cmd := bucketCmd{ResourceCmd: ResourceCmd{Name: name}}
+	// Nothing to change is not an error, it just must not write the bucket.
+	is.NoError(cmd.Run(t.Context(), apiClient))
+
+	updated := &storage.Bucket{}
+	is.NoError(apiClient.Get(
+		t.Context(),
+		api.NamespacedName(name, apiClient.Project),
+		updated,
+	))
+	is.NotContains(updated.GetAnnotations(), cli.ManagedByAnnotation)
 }
 
 func runBucketUpdateNamedWithFlags(

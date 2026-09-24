@@ -1,10 +1,7 @@
 package create
 
 import (
-	"bufio"
 	"context"
-	"fmt"
-	"os"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,39 +17,34 @@ import (
 )
 
 type mySQLCmd struct {
-	resourceCmd
-	Location              meta.LocationName                      `placeholder:"${mysql_location_default}" help:"Where the MySQL instance is created. Available locations are: ${mysql_location_options}"`
-	MachineType           string                                 `placeholder:"${mysql_machine_default}" help:"Sizing for a particular MySQL instance. Available types: ${mysql_machine_types}"`
-	AllowedCidrs          []meta.IPv4CIDR                        `placeholder:"203.0.113.1/32" help:"IP addresses allowed to connect to the instance."`
-	SSHKeys               []storage.SSHKey                       `help:"SSH public keys allowed to connect to the database server in order to up-/download and directly restore database backups."`
-	SSHKeysFile           *os.File                               `completion-predictor:"file" help:"Path to a file containing a list of SSH public keys (see above), separated by newlines. Lines prefixed with # are ignored."`
+	ResourceCmd
+	Location              meta.LocationName `help:"Where the MySQL instance is created." completion-predictor:"apifield:mysql_location"`
+	MachineType           string            `help:"Defines the sizing for a particular MySQL instance." completion-predictor:"apifield:mysql_machine_type"`
+	AllowedCidrs          []meta.IPv4CIDR   `placeholder:"203.0.113.1/32" help:"IP addresses allowed to connect to the instance."`
+	DatabaseSSHKeysFlags  `set:"ssh_keys_purpose=allowed to connect to the database server in order to up-/download and directly restore database backups"`
+	MysqlVersion          storage.MySQLVersion                   `help:"Release version with which the MySQL instance is created." completion-predictor:"apifield:mysql_version"`
 	SQLMode               *[]storage.MySQLMode                   `placeholder:"\"MODE1, MODE2, ...\"" help:"Configures the sql_mode setting. Modes affect the SQL syntax MySQL supports and the data validation checks it performs. Defaults to: ${mysql_mode}"`
-	CharacterSetName      string                                 `placeholder:"${mysql_charset}" help:"Configures the character_set_server variable."`
-	CharacterSetCollation string                                 `placeholder:"${mysql_collation}" help:"Configures the collation_server variable."`
-	LongQueryTime         storage.LongQueryTime                  `placeholder:"${mysql_long_query_time}" help:"Configures the long_query_time variable. If a query takes longer than this duration, the query is logged to the slow query log file."`
-	MinWordLength         *int                                   `placeholder:"${mysql_min_word_length}" help:"Configures the ft_min_word_len and innodb_ft_min_token_size variables."`
-	TransactionIsolation  storage.MySQLTransactionCharacteristic `placeholder:"${mysql_transaction_isolation}" help:"Configures the transaction_isolation variable."`
-	KeepDailyBackups      *int                                   `placeholder:"${mysql_backup_retention_days}" help:"Number of daily database backups to keep. Note that setting this to 0, backup will be disabled and existing dumps deleted immediately."`
+	CharacterSetName      string                                 `help:"Configures the character_set_server variable." completion-predictor:"apifield:mysql_character_set_name"`
+	CharacterSetCollation string                                 `help:"Configures the collation_server variable." completion-predictor:"apifield:mysql_character_set_collation"`
+	LongQueryTime         storage.LongQueryTime                  `help:"Configures the long_query_time variable. If a query takes longer than this duration, the query is logged to the slow query log file." completion-predictor:"apifield:mysql_long_query_time"`
+	MinWordLength         *int                                   `help:"Configures the ft_min_word_len and innodb_ft_min_token_size variables." completion-predictor:"apifield:mysql_min_word_length"`
+	TransactionIsolation  storage.MySQLTransactionCharacteristic `help:"Configures the transaction_isolation variable." completion-predictor:"apifield:mysql_transaction_isolation"`
+	KeepDailyBackups      *int                                   `help:"Number of daily database backups to keep. Note that setting this to 0, backup will be disabled and existing dumps deleted immediately." completion-predictor:"apifield:mysql_keep_daily_backups"`
 }
 
 func (cmd *mySQLCmd) Run(ctx context.Context, client *api.Client) error {
-	if cmd.SSHKeysFile != nil {
-		defer cmd.SSHKeysFile.Close()
-
-		keys, err := ParseSSHKeys(cmd.SSHKeysFile)
-		if err != nil {
-			return err
-		}
-		cmd.SSHKeys = keys
+	mysql, err := cmd.newMySQL(client.Project)
+	if err != nil {
+		return err
 	}
-
-	mysql := cmd.newMySQL(client.Project)
 
 	c := cmd.newCreator(client, mysql, storage.MySQLKind)
 	ctx, cancel := context.WithTimeout(ctx, cmd.WaitTimeout)
 	defer cancel()
 
-	if err := c.createResource(ctx); err != nil {
+	if err := c.createResourceInLocation(ctx, cmd.Location, func(location meta.LocationName) {
+		mysql.Spec.ForProvider.Location = location
+	}); err != nil {
 		return err
 	}
 
@@ -72,8 +64,13 @@ func (cmd *mySQLCmd) Run(ctx context.Context, client *api.Client) error {
 	})
 }
 
-func (cmd *mySQLCmd) newMySQL(namespace string) *storage.MySQL {
+func (cmd *mySQLCmd) newMySQL(namespace string) (*storage.MySQL, error) {
 	name := getName(cmd.Name)
+
+	sshKeys, err := cmd.StorageKeys(&cmd.Writer)
+	if err != nil {
+		return nil, err
+	}
 
 	mySQL := &storage.MySQL{
 		ObjectMeta: metav1.ObjectMeta{
@@ -90,8 +87,9 @@ func (cmd *mySQLCmd) newMySQL(namespace string) *storage.MySQL {
 			ForProvider: storage.MySQLParameters{
 				Location:     cmd.Location,
 				MachineType:  infra.NewMachineType(cmd.MachineType),
-				AllowedCIDRs: []meta.IPv4CIDR{},  // avoid missing parameter error
-				SSHKeys:      []storage.SSHKey{}, // avoid missing parameter error
+				AllowedCIDRs: []meta.IPv4CIDR{}, // avoid missing parameter error
+				SSHKeys:      sshKeys,
+				Version:      cmd.MysqlVersion,
 				SQLMode:      cmd.SQLMode,
 				CharacterSet: storage.MySQLCharacterSet{
 					Name:      cmd.CharacterSetName,
@@ -108,49 +106,15 @@ func (cmd *mySQLCmd) newMySQL(namespace string) *storage.MySQL {
 	if cmd.AllowedCidrs != nil {
 		mySQL.Spec.ForProvider.AllowedCIDRs = cmd.AllowedCidrs
 	}
-	if cmd.SSHKeys != nil {
-		mySQL.Spec.ForProvider.SSHKeys = cmd.SSHKeys
-	}
 
-	return mySQL
+	return mySQL, nil
 }
 
 // MySQLKongVars returns all variables which are used in the MySQL
 // create command
 func MySQLKongVars() kong.Vars {
 	result := make(kong.Vars)
-	result["mysql_machine_types"] = strings.Join(stringerSlice(storage.MySQLMachineTypes), ", ")
-	result["mysql_machine_default"] = storage.MySQLMachineTypeDefault.String()
-	result["mysql_location_options"] = strings.Join(storage.MySQLLocationOptions, ", ")
-	result["mysql_location_default"] = string(storage.MySQLLocationDefault)
-	result["mysql_user"] = string(storage.MySQLUser)
 	result["mysql_mode"] = strings.Join(storage.MySQLModeDefault, ", ")
-	result["mysql_long_query_time"] = string(storage.MySQLLongQueryTimeDefault)
-	result["mysql_charset"] = string(storage.MySQLCharsetDefault)
-	result["mysql_collation"] = string(storage.MySQLCollationDefault)
-	result["mysql_min_word_length"] = fmt.Sprintf("%d", storage.MySQLMinWordLengthDefault)
-	result["mysql_transaction_isolation"] = string(storage.MySQLTransactionIsolationDefault)
-	result["mysql_backup_retention_days"] = fmt.Sprintf("%d", storage.MySQLBackupRetentionDaysDefault)
+
 	return result
-}
-
-// ParseSSHKeys parses the SSH keys from the given file.
-func ParseSSHKeys(file *os.File) ([]storage.SSHKey, error) {
-	keys := []storage.SSHKey{}
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		keys = append(keys, storage.SSHKey(scanner.Text()))
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading SSH keys file: %w", err)
-	}
-
-	return keys, nil
 }

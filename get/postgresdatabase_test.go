@@ -55,8 +55,8 @@ func TestPostgresDatabase(t *testing.T) {
 					location: meta.LocationNineCZ41,
 				},
 			},
-			get:         postgresDatabaseCmd{databaseCmd: databaseCmd{resourceCmd: resourceCmd{Name: "test1"}, PrintConnectionString: true}},
-			wantContain: []string{"postgres://", "foo_bar", "topsecret"},
+			get:         postgresDatabaseCmd{DatabaseCmd: DatabaseCmd{ResourceCmd: ResourceCmd{Name: "test1"}, PrintConnectionString: true}},
+			wantContain: []string{"postgres://", "foo_bar", "topsecret", "sslmode=require"},
 			wantLines:   1,
 		},
 	}

@@ -3,11 +3,13 @@ package create
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/alecthomas/kong"
 	runtimev1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/grafana/loki/v3/pkg/logcli/output"
@@ -84,7 +86,7 @@ func TestCreateApplication(t *testing.T) {
 	}{
 		"without git auth": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "custom-name",
 				},
@@ -97,7 +99,7 @@ func TestCreateApplication(t *testing.T) {
 				Hosts:               []string{"custom.example.org", "custom2.example.org"},
 				Port:                new(int32(1337)),
 				HealthProbe:         healthProbe{PeriodSeconds: int32(7), Path: "/he"},
-				Replicas:            new(int32(42)),
+				Replicas:            42,
 				BasicAuth:           new(false),
 				Env:                 map[string]string{"hello": "world"},
 				BuildEnv:            map[string]string{"BP_GO_TARGETS": "./cmd/web-server"},
@@ -115,7 +117,7 @@ func TestCreateApplication(t *testing.T) {
 				is.Equal(*cmd.Port, *app.Spec.ForProvider.Config.Port)
 				is.Equal(cmd.HealthProbe.PeriodSeconds, *app.Spec.ForProvider.Config.HealthProbe.PeriodSeconds)
 				is.Equal(cmd.HealthProbe.Path, app.Spec.ForProvider.Config.HealthProbe.HTTPGet.Path)
-				is.Equal(*cmd.Replicas, *app.Spec.ForProvider.Config.Replicas)
+				is.Equal(cmd.Replicas, *app.Spec.ForProvider.Config.Replicas)
 				is.Equal(*cmd.BasicAuth, *app.Spec.ForProvider.Config.EnableBasicAuth)
 				is.Equal(application.EnvVarsFromMap(cmd.Env), app.Spec.ForProvider.Config.Env)
 				is.Equal(application.EnvVarsFromMap(cmd.BuildEnv), app.Spec.ForProvider.BuildEnv)
@@ -128,7 +130,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"with basic auth": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "basic-auth",
 				},
@@ -144,6 +146,36 @@ func TestCreateApplication(t *testing.T) {
 				is.Equal(*cmd.BasicAuth, *app.Spec.ForProvider.Config.EnableBasicAuth)
 			},
 		},
+		"with scheduled job": {
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Wait: false,
+					Name: "scheduled-job-app",
+				},
+				Git:  gitConfig{URL: "https://github.com/ninech/doesnotexist.git"},
+				Size: new("mini"),
+				ScheduledJob: scheduledJob{
+					Name:     "nightly-backup",
+					Command:  "./backup.sh",
+					Schedule: "0 3 * * *",
+					TimeZone: new("Europe/Zurich"),
+					Retries:  2,
+					Timeout:  10 * time.Minute,
+				},
+				SkipRepoAccessCheck: true,
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, app *apps.Application) {
+				is := require.New(t)
+				is.Len(app.Spec.ForProvider.Config.ScheduledJobs, 1)
+				job := app.Spec.ForProvider.Config.ScheduledJobs[0]
+				is.Equal(cmd.ScheduledJob.Name, job.Name)
+				is.Equal(cmd.ScheduledJob.Command, job.Command)
+				is.Equal(cmd.ScheduledJob.Schedule, job.Schedule)
+				is.Equal(*cmd.ScheduledJob.TimeZone, job.TimeZone)
+				is.Equal(cmd.ScheduledJob.Retries, *job.Retries)
+				is.Equal(cmd.ScheduledJob.Timeout, job.Timeout.Duration)
+			},
+		},
 		"with user/pass git auth": {
 			cmd: applicationCmd{
 				Git: gitConfig{
@@ -151,7 +183,7 @@ func TestCreateApplication(t *testing.T) {
 					Username: new("deploy"),
 					Password: new("hunter2"),
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "user-pass-auth",
 				},
@@ -175,7 +207,7 @@ func TestCreateApplication(t *testing.T) {
 					URL:           "https://github.com/ninech/doesnotexist.git",
 					SSHPrivateKey: &dummyRSAKey,
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "ssh-key-auth",
 				},
@@ -199,7 +231,7 @@ func TestCreateApplication(t *testing.T) {
 					URL:           "https://github.com/ninech/doesnotexist.git",
 					SSHPrivateKey: &dummyED25519Key,
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "ssh-key-auth-ed25519",
 				},
@@ -223,7 +255,7 @@ func TestCreateApplication(t *testing.T) {
 					URL:                   "https://github.com/ninech/doesnotexist.git",
 					SSHPrivateKeyFromFile: new(filenameRSAKey),
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "ssh-key-auth-from-file",
 				},
@@ -247,7 +279,7 @@ func TestCreateApplication(t *testing.T) {
 					URL:                   "https://github.com/ninech/doesnotexist.git",
 					SSHPrivateKeyFromFile: new(filenameED25519Key),
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "ssh-key-auth-from-file-ed25519",
 				},
@@ -271,7 +303,7 @@ func TestCreateApplication(t *testing.T) {
 					URL:           "https://github.com/ninech/doesnotexist.git",
 					SSHPrivateKey: new("not valid"),
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "ssh-key-auth-non-valid",
 				},
@@ -285,7 +317,7 @@ func TestCreateApplication(t *testing.T) {
 				Git: gitConfig{
 					URL: "https://github.com/ninech/doesnotexist.git",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "deploy-job-empty-command",
 				},
@@ -303,7 +335,7 @@ func TestCreateApplication(t *testing.T) {
 				Git: gitConfig{
 					URL: "https://github.com/ninech/doesnotexist.git",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "deploy-job-empty-name",
 				},
@@ -323,7 +355,7 @@ func TestCreateApplication(t *testing.T) {
 					SubPath:  "/my/app",
 					Revision: "superbug",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "git-information-happy-path",
 				},
@@ -360,7 +392,7 @@ func TestCreateApplication(t *testing.T) {
 					SubPath:  "/my/app",
 					Revision: "superbug",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "git-information-errors",
 				},
@@ -381,7 +413,7 @@ func TestCreateApplication(t *testing.T) {
 					SubPath:  "/my/app",
 					Revision: "notexistent",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "git-information-unknown-revision",
 				},
@@ -410,7 +442,7 @@ func TestCreateApplication(t *testing.T) {
 					SubPath:  "/my/app",
 					Revision: "notexistent",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "git-information-unknown-revision",
 				},
@@ -429,7 +461,7 @@ func TestCreateApplication(t *testing.T) {
 					SubPath:  "/my/app",
 					Revision: "main",
 				},
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "git-information-update-url-to-https",
 				},
@@ -460,7 +492,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"with sensitive env": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: "sensitive-env-test",
 				},
 				Git: gitConfig{
@@ -489,7 +521,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"with heroku buildpack stack": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "heroku-stack",
 				},
@@ -507,7 +539,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"with paketo buildpack stack": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "paketo-stack",
 				},
@@ -525,7 +557,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"without buildpack stack defaults to empty": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "no-stack",
 				},
@@ -542,7 +574,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"from-local-dir uploads zip and sets git URL": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "local-dir-app",
 				},
@@ -557,7 +589,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"from-local-dir with sub-path returns error": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "local-dir-subpath",
 				},
@@ -568,7 +600,7 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"from-local-dir with non-existent directory returns error": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "local-dir-bad",
 				},
@@ -578,13 +610,47 @@ func TestCreateApplication(t *testing.T) {
 		},
 		"neither git-url nor from-local-dir returns error": {
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Wait: false,
 					Name: "no-source",
 				},
 				SkipRepoAccessCheck: true,
 			},
 			errorExpected: true,
+		},
+		"with services": {
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Wait: false,
+					Name: "with-services",
+				},
+				Git: gitConfig{
+					URL:      "https://github.com/ninech/doesnotexist.git",
+					Revision: "main",
+				},
+				Service: func() []application.NamedServiceReference {
+					cache := application.TypedReference{}
+					cache.UnmarshalText([]byte("keyvaluestore/my-kvs"))
+					db := application.TypedReference{}
+					db.UnmarshalText([]byte("mysql/my-db"))
+					return []application.NamedServiceReference{
+						{Name: "cache", Target: cache},
+						{Name: "db", Target: db},
+					}
+				}(),
+				SkipRepoAccessCheck: true,
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, app *apps.Application) {
+				is := require.New(t)
+				is.Len(app.Spec.ForProvider.Services, 2)
+				// sorted by name
+				is.Equal("cache", app.Spec.ForProvider.Services[0].Name)
+				is.Equal("my-kvs", app.Spec.ForProvider.Services[0].Target.Name)
+				is.Equal("KeyValueStore", app.Spec.ForProvider.Services[0].Target.Kind)
+				is.Equal("db", app.Spec.ForProvider.Services[1].Name)
+				is.Equal("my-db", app.Spec.ForProvider.Services[1].Target.Name)
+				is.Equal("MySQL", app.Spec.ForProvider.Services[1].Target.Kind)
+			},
 		},
 	}
 
@@ -620,7 +686,7 @@ func TestApplicationWait(t *testing.T) {
 	t.Parallel()
 
 	cmd := applicationCmd{
-		resourceCmd: resourceCmd{
+		ResourceCmd: ResourceCmd{
 			Wait:        true,
 			WaitTimeout: time.Second * 5,
 			Name:        "some-name",
@@ -771,7 +837,7 @@ func TestApplicationBuildFail(t *testing.T) {
 
 	is := require.New(t)
 	cmd := applicationCmd{
-		resourceCmd: resourceCmd{
+		ResourceCmd: ResourceCmd{
 			Wait:        true,
 			WaitTimeout: time.Second * 5,
 			Name:        "some-name",
@@ -863,4 +929,32 @@ func setResourceCondition(ctx context.Context, apiClient *api.Client, mg resourc
 
 	mg.SetConditions(condition)
 	return apiClient.Update(ctx, mg)
+}
+
+// TestApplicationFlags tests that Kong applies the default value for the
+// replicas flag when it is not explicitly provided.
+func TestApplicationFlags(t *testing.T) {
+	t.Parallel()
+
+	is := require.New(t)
+
+	vars, err := ApplicationKongVars()
+	is.NoError(err)
+
+	defaultCmd := &applicationCmd{}
+	_, err = kong.Must(defaultCmd, vars, kong.BindTo(io.Discard, (*io.Writer)(nil))).Parse([]string{
+		`test-app`,
+		`--git-url=https://github.com/ninech/doesnotexist.git`,
+	})
+	is.NoError(err)
+	is.Equal(int32(DefaultReplicas), defaultCmd.Replicas)
+
+	explicitCmd := &applicationCmd{}
+	_, err = kong.Must(explicitCmd, vars, kong.BindTo(io.Discard, (*io.Writer)(nil))).Parse([]string{
+		`test-app`,
+		`--git-url=https://github.com/ninech/doesnotexist.git`,
+		`--replicas=5`,
+	})
+	is.NoError(err)
+	is.Equal(int32(5), explicitCmd.Replicas)
 }

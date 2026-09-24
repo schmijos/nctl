@@ -11,7 +11,7 @@ import (
 )
 
 type keyValueStoreCmd struct {
-	resourceCmd
+	ResourceCmd
 	PrintToken  bool `help:"Print the bearer token of the Account. Requires name to be set." xor:"print"`
 	PrintCACert bool `help:"Print the ca certificate. Requires name to be set." xor:"print"`
 }
@@ -37,7 +37,7 @@ func (cmd *keyValueStoreCmd) print(ctx context.Context, client *api.Client, list
 		return cmd.printSecret(ctx, client, &keyValueStoreList.Items[0], out, func(_, pw string) string { return pw })
 	}
 	if cmd.Name != "" && cmd.PrintCACert {
-		return printBase64(&out.Writer, keyValueStoreList.Items[0].Status.AtProvider.CACert)
+		return WriteBase64(&out.Writer, keyValueStoreList.Items[0].Status.AtProvider.CACert)
 	}
 
 	switch out.Format {

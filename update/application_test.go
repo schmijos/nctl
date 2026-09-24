@@ -9,6 +9,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	apps "github.com/ninech/apis/apps/v1alpha1"
+	meta "github.com/ninech/apis/meta/v1alpha1"
+	storage "github.com/ninech/apis/storage/v1alpha1"
 	"github.com/ninech/nctl/api/gitinfo"
 	"github.com/ninech/nctl/create"
 	"github.com/ninech/nctl/internal/application"
@@ -87,13 +89,14 @@ func TestApplication(t *testing.T) {
 		cmd                           applicationCmd
 		checkApp                      func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application)
 		checkSecret                   func(t *testing.T, cmd applicationCmd, authSecret *corev1.Secret)
+		verifyRequest                 func(t *testing.T, p test.GitInfoServiceParsed)
 		gitInformationServiceResponse test.GitInformationServiceResponse
 		errorExpected                 bool
 	}{
 		"change port": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Port: new(int32(1234)),
@@ -106,7 +109,7 @@ func TestApplication(t *testing.T) {
 		"port is unchanged when updating unrelated field": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Size: new("newsize"),
@@ -120,7 +123,7 @@ func TestApplication(t *testing.T) {
 		"all field updates": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -173,6 +176,34 @@ func TestApplication(t *testing.T) {
 				is.Nil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
 			},
 		},
+		"unset replicas": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				UnsetReplicas: new(true),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.NotNil(orig.Spec.ForProvider.Config.Replicas)
+				is.Nil(updated.Spec.ForProvider.Config.Replicas)
+			},
+		},
+		"replicas unchanged when unset flag is false": {
+			orig:          existingApp,
+			errorExpected: true,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				UnsetReplicas: new(false),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal(orig.Spec.ForProvider.Config.Replicas, updated.Spec.ForProvider.Config.Replicas)
+			},
+		},
 		"reset custom health probe": {
 			orig: func() *apps.Application {
 				a := existingApp
@@ -187,7 +218,7 @@ func TestApplication(t *testing.T) {
 				return a
 			}(),
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				DeleteHealthProbe: new(true),
@@ -198,6 +229,7 @@ func TestApplication(t *testing.T) {
 			},
 		},
 		"no-op when delete custom health probe set false": {
+			errorExpected: true,
 			orig: func() *apps.Application {
 				a := existingApp
 				a.Spec.ForProvider.Config.HealthProbe = &apps.Probe{
@@ -211,7 +243,7 @@ func TestApplication(t *testing.T) {
 				return a
 			}(),
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				DeleteHealthProbe: new(false),
@@ -225,7 +257,7 @@ func TestApplication(t *testing.T) {
 		"reset env variable": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				DeleteEnv: &[]string{"foo"},
@@ -245,7 +277,7 @@ func TestApplication(t *testing.T) {
 		"change multiple env variables at once": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Env: map[string]string{"bar1": "zoo", "bar2": "foo"},
@@ -260,7 +292,7 @@ func TestApplication(t *testing.T) {
 		"reset build env variable": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				DeleteBuildEnv: &[]string{"BP_ENVIRONMENT_VARIABLE"},
@@ -274,7 +306,7 @@ func TestApplication(t *testing.T) {
 		"update variable from normal/sensitive": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				SensitiveEnv: map[string]string{"poo": "blue"},
@@ -291,7 +323,7 @@ func TestApplication(t *testing.T) {
 		"change basic auth password": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				ChangeBasicAuthPassword: new(true),
@@ -308,7 +340,7 @@ func TestApplication(t *testing.T) {
 				Password: new("some-password"),
 			},
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -342,7 +374,7 @@ func TestApplication(t *testing.T) {
 				SSHPrivateKey: new("fakekey"),
 			},
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -372,7 +404,7 @@ func TestApplication(t *testing.T) {
 			orig:    existingApp,
 			gitAuth: nil,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -406,7 +438,7 @@ func TestApplication(t *testing.T) {
 				SSHPrivateKey: new("fakekey"),
 			},
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -442,7 +474,7 @@ func TestApplication(t *testing.T) {
 				SSHPrivateKey: new("fakekey"),
 			},
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -468,10 +500,71 @@ func TestApplication(t *testing.T) {
 				is.Nil(updated.Spec.ForProvider.Config.DeployJob)
 			},
 		},
+		"add new scheduled job": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				ScheduledJob: &scheduledJob{
+					Name:     new("nightly-backup"),
+					Command:  new("./backup.sh"),
+					Schedule: new("0 3 * * *"),
+					TimeZone: new("Europe/Zurich"),
+					Retries:  new(int32(2)),
+					Timeout:  ptr.To(10 * time.Minute),
+				},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Len(updated.Spec.ForProvider.Config.ScheduledJobs, 1)
+				job := updated.Spec.ForProvider.Config.ScheduledJobs[0]
+				is.Equal(*cmd.ScheduledJob.Name, job.Name)
+				is.Equal(*cmd.ScheduledJob.Command, job.Command)
+				is.Equal(*cmd.ScheduledJob.Schedule, job.Schedule)
+				is.Equal(*cmd.ScheduledJob.TimeZone, job.TimeZone)
+				is.Equal(*cmd.ScheduledJob.Retries, *job.Retries)
+				is.Equal(*cmd.ScheduledJob.Timeout, job.Timeout.Duration)
+			},
+		},
+		"update existing scheduled job": {
+			orig: func() *apps.Application {
+				a := existingApp.DeepCopy()
+				a.Spec.ForProvider.Config.ScheduledJobs = []apps.ScheduledJob{
+					{
+						Job:      apps.Job{Name: "nightly-backup", Command: "./backup.sh"},
+						Schedule: "0 3 * * *",
+						FiniteJob: apps.FiniteJob{
+							Retries: new(int32(1)),
+							Timeout: &metav1.Duration{Duration: 5 * time.Minute},
+						},
+					},
+				}
+				return a
+			}(),
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				ScheduledJob: &scheduledJob{
+					Name:    new("nightly-backup"),
+					Retries: new(int32(5)),
+					Timeout: ptr.To(20 * time.Minute),
+				},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Len(updated.Spec.ForProvider.Config.ScheduledJobs, 1)
+				job := updated.Spec.ForProvider.Config.ScheduledJobs[0]
+				is.Equal(*cmd.ScheduledJob.Retries, *job.Retries)
+				is.Equal(*cmd.ScheduledJob.Timeout, job.Timeout.Duration)
+				is.Equal(orig.Spec.ForProvider.Config.DeployJob, updated.Spec.ForProvider.Config.DeployJob)
+			},
+		},
 		"retry release": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				RetryRelease: new(true),
@@ -482,9 +575,10 @@ func TestApplication(t *testing.T) {
 			},
 		},
 		"do not retry release": {
-			orig: existingApp,
+			errorExpected: true,
+			orig:          existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				RetryRelease: new(false),
@@ -497,7 +591,7 @@ func TestApplication(t *testing.T) {
 		"retry build": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				RetryBuild: new(true),
@@ -508,9 +602,10 @@ func TestApplication(t *testing.T) {
 			},
 		},
 		"do not retry build": {
-			orig: existingApp,
+			errorExpected: true,
+			orig:          existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				RetryBuild: new(false),
@@ -523,7 +618,7 @@ func TestApplication(t *testing.T) {
 		"disabling the git repo check works": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -545,7 +640,7 @@ func TestApplication(t *testing.T) {
 		"an error on the git repo check will lead to an error shown to the user": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -563,7 +658,7 @@ func TestApplication(t *testing.T) {
 		"specifying a non existing branch/tag will be detected": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -587,49 +682,91 @@ func TestApplication(t *testing.T) {
 			errorExpected: true,
 		},
 		"update buildpack stack to heroku triggers a build": {
-		orig: existingApp,
-		cmd: applicationCmd{
-			resourceCmd: resourceCmd{
-				Name: existingApp.Name,
-			},
-			BuildpackStack: new(string(apps.BuildpackStackHeroku)),
-		},
-		checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
-			is := require.New(t)
-			is.Equal(apps.BuildpackStack(apps.BuildpackStackHeroku), updated.Spec.ForProvider.BuildpackStack)
-			is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
-		},
-	},
-	"update buildpack stack to paketo triggers a build": {
-		orig: existingApp,
-		cmd: applicationCmd{
-			resourceCmd: resourceCmd{
-				Name: existingApp.Name,
-			},
-			BuildpackStack: new(string(apps.BuildpackStackPaketo)),
-		},
-		checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
-			is := require.New(t)
-			is.Equal(apps.BuildpackStack(apps.BuildpackStackPaketo), updated.Spec.ForProvider.BuildpackStack)
-			is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
-		},
-	},
-	"not setting buildpack stack does not trigger a build": {
-		orig: existingApp,
-		cmd: applicationCmd{
-			resourceCmd: resourceCmd{
-				Name: existingApp.Name,
-			},
-		},
-		checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
-			is := require.New(t)
-			is.Nil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
-		},
-	},
-	"defaulting to HTTPS when not specifying a scheme in a git URL works": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				BuildpackStack: new(string(apps.BuildpackStackHeroku)),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal(apps.BuildpackStack(apps.BuildpackStackHeroku), updated.Spec.ForProvider.BuildpackStack)
+				is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"update buildpack stack to paketo triggers a build": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				BuildpackStack: new(string(apps.BuildpackStackPaketo)),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal(apps.BuildpackStack(apps.BuildpackStackPaketo), updated.Spec.ForProvider.BuildpackStack)
+				is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"not setting buildpack stack does not trigger a build": {
+			errorExpected: true,
+			orig:          existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Nil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"update language triggers a build": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Language: new("ruby"),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal(apps.Language("ruby"), updated.Spec.ForProvider.Language)
+				is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"update language to empty triggers a build": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Language: new(""),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal(apps.Language(""), updated.Spec.ForProvider.Language)
+				is.NotNil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"not setting language does not trigger a build": {
+			errorExpected: true,
+			orig:          existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Nil(application.EnvVarByName(updated.Spec.ForProvider.BuildEnv, BuildTrigger))
+			},
+		},
+		"defaulting to HTTPS when not specifying a scheme in a git URL works": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				Git: &gitConfig{
@@ -660,7 +797,7 @@ func TestApplication(t *testing.T) {
 		"from-local-dir uploads zip and updates git URL": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				FromLocalDir: &localDir,
@@ -676,7 +813,7 @@ func TestApplication(t *testing.T) {
 		"from-local-dir with existing sub-path returns error": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				FromLocalDir: &localDir,
@@ -686,12 +823,137 @@ func TestApplication(t *testing.T) {
 		"from-local-dir with non-existent directory returns error": {
 			orig: existingApp,
 			cmd: applicationCmd{
-				resourceCmd: resourceCmd{
+				ResourceCmd: ResourceCmd{
 					Name: existingApp.Name,
 				},
 				FromLocalDir: new("/nonexistent/path/to/dir"),
 			},
 			errorExpected: true,
+		},
+		"add service": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Service: func() []application.NamedServiceReference {
+					ref := application.TypedReference{}
+					ref.UnmarshalText([]byte("keyvaluestore/my-kvs"))
+					return []application.NamedServiceReference{{Name: "cache", Target: ref}}
+				}(),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Len(updated.Spec.ForProvider.Services, 1)
+				is.Equal("cache", updated.Spec.ForProvider.Services[0].Name)
+				is.Equal("my-kvs", updated.Spec.ForProvider.Services[0].Target.Name)
+				is.Equal(storage.KeyValueStoreKind, updated.Spec.ForProvider.Services[0].Target.Kind)
+			},
+		},
+		"pause application": {
+			orig: existingApp,
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Pause: new(true),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.True(updated.Spec.ForProvider.Paused)
+			},
+		},
+		"unpause application": {
+			orig: func() *apps.Application {
+				a := existingApp.DeepCopy()
+				a.Spec.ForProvider.Paused = true
+				return a
+			}(),
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Pause: new(false),
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.False(updated.Spec.ForProvider.Paused)
+			},
+		},
+		"existing ssh auth is used when only updating revision": {
+			orig: func() *apps.Application {
+				a := existingApp.DeepCopy()
+				a.Spec.ForProvider.Git.URL = "git@github.com:ninech/some-repo.git"
+				return a
+			}(),
+			gitAuth: &gitinfo.Auth{
+				SSHPrivateKey: &dummyRSAKey,
+			},
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				Git: &gitConfig{
+					Revision: new("v1.2.3"),
+				},
+			},
+			gitInformationServiceResponse: test.GitInformationServiceResponse{
+				Code: 200,
+				Content: apps.GitExploreResponse{
+					RepositoryInfo: &apps.RepositoryInfo{
+						URL:      "git@github.com:ninech/some-repo.git",
+						Branches: []string{"v1.2.3"},
+						RevisionResponse: &apps.RevisionResponse{
+							RevisionRequested: "v1.2.3",
+							Found:             true,
+						},
+					},
+				},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Equal("v1.2.3", updated.Spec.ForProvider.Git.Revision)
+			},
+			verifyRequest: func(t *testing.T, p test.GitInfoServiceParsed) {
+				is := require.New(t)
+				is.NotNil(p.Request.Auth, "existing SSH key should have been sent to the git info service")
+				is.NotEmpty(p.Request.Auth.PrivateKey)
+			},
+		},
+		"delete service": {
+			orig: &apps.Application{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "some-name",
+					Namespace: test.DefaultProject,
+				},
+				Spec: apps.ApplicationSpec{
+					ForProvider: apps.ApplicationParameters{
+						Git: existingApp.Spec.ForProvider.Git,
+						Config: apps.Config{
+							Size: initialSize,
+						},
+						Services: apps.NamedServiceTargetList{
+							{
+								Name: "cache",
+								Target: meta.TypedReference{
+									Reference: meta.Reference{Name: "my-kvs", Namespace: test.DefaultProject},
+									GroupKind: metav1.GroupKind{Group: storage.Group, Kind: storage.KeyValueStoreKind},
+								},
+							},
+						},
+					},
+				},
+			},
+			cmd: applicationCmd{
+				ResourceCmd: ResourceCmd{
+					Name: existingApp.Name,
+				},
+				DeleteService: []string{"cache"},
+			},
+			checkApp: func(t *testing.T, cmd applicationCmd, orig, updated *apps.Application) {
+				is := require.New(t)
+				is.Empty(updated.Spec.ForProvider.Services)
+			},
 		},
 	}
 
@@ -742,6 +1004,12 @@ func TestApplication(t *testing.T) {
 
 				tc.checkSecret(t, tc.cmd, updatedSecret)
 			}
+
+			if tc.verifyRequest != nil {
+				req, err := gitInfoService.Request()
+				is.NoError(err)
+				tc.verifyRequest(t, req)
+			}
 		})
 	}
 }
@@ -771,4 +1039,26 @@ func TestApplicationFlags(t *testing.T) {
 	is.NotNil(emptyFlags.Hosts)
 	is.NotNil(emptyFlags.Env)
 	is.NotNil(emptyFlags.BuildEnv)
+
+	pauseFlags := &applicationCmd{}
+	_, err = kong.Must(pauseFlags, vars, kong.BindTo(t.Output(), (*io.Writer)(nil))).Parse([]string{`testname`, `--pause`})
+	is.NoError(err)
+	is.NotNil(pauseFlags.Pause)
+	is.True(*pauseFlags.Pause)
+
+	noPauseFlags := &applicationCmd{}
+	_, err = kong.Must(noPauseFlags, vars, kong.BindTo(t.Output(), (*io.Writer)(nil))).Parse([]string{`testname`, `--no-pause`})
+	is.NoError(err)
+	is.NotNil(noPauseFlags.Pause)
+	is.False(*noPauseFlags.Pause)
+
+	unsetReplicasFlags := &applicationCmd{}
+	_, err = kong.Must(unsetReplicasFlags, vars, kong.BindTo(t.Output(), (*io.Writer)(nil))).Parse([]string{`testname`, `--unset-replicas`})
+	is.NoError(err)
+	is.NotNil(unsetReplicasFlags.UnsetReplicas)
+	is.True(*unsetReplicasFlags.UnsetReplicas)
+
+	xorReplicasFlags := &applicationCmd{}
+	_, err = kong.Must(xorReplicasFlags, vars, kong.BindTo(t.Output(), (*io.Writer)(nil))).Parse([]string{`testname`, `--replicas=2`, `--unset-replicas`})
+	is.Error(err)
 }

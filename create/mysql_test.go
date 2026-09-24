@@ -48,9 +48,16 @@ func TestMySQL(t *testing.T) {
 			want:   storage.MySQLParameters{MachineType: storage.MySQLMachineTypeDefault},
 		},
 		{
-			name:   "sshKeys",
-			create: mySQLCmd{SSHKeys: []storage.SSHKey{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGG5/nnivrW4zLD4ANLclVT3y68GAg6NOA3HpzFLo5e test@test"}},
-			want:   storage.MySQLParameters{SSHKeys: []storage.SSHKey{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGG5/nnivrW4zLD4ANLclVT3y68GAg6NOA3HpzFLo5e test@test"}},
+			name: "sshKeys",
+			create: mySQLCmd{DatabaseSSHKeysFlags: DatabaseSSHKeysFlags{
+				SSHKeysFlags: SSHKeysFlags{SSHKeys: []string{testPublicKeyA}},
+			}},
+			want: storage.MySQLParameters{SSHKeys: []storage.SSHKey{testPublicKeyA}},
+		},
+		{
+			name:   "version",
+			create: mySQLCmd{MysqlVersion: storage.MySQLVersionDefault},
+			want:   storage.MySQLParameters{Version: storage.MySQLVersionDefault},
 		},
 		{
 			name:   "sqlMode",

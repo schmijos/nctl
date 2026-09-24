@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
@@ -16,29 +15,34 @@ import (
 )
 
 type Cmd struct {
-	Filename            *os.File             `short:"f" completion-predictor:"file"`
-	FromFile            fromFile             `cmd:"" default:"1" name:"-f <file>" help:"Delete any resource from a yaml or json file."`
-	VCluster            vclusterCmd          `cmd:"" group:"infrastructure.nine.ch" name:"vcluster" help:"Delete a vcluster."`
-	APIServiceAccount   apiServiceAccountCmd `cmd:"" group:"iam.nine.ch" name:"apiserviceaccount" aliases:"asa" help:"Delete an API Service Account."`
-	Project             projectCmd           `cmd:"" group:"management.nine.ch" name:"project" aliases:"proj" help:"Delete a Project."`
-	Config              configCmd            `cmd:"" group:"deplo.io" name:"config" help:"Delete a deplo.io Project Configuration."`
-	Application         applicationCmd       `cmd:"" group:"deplo.io" name:"application" aliases:"app,application" help:"Delete a deplo.io Application."`
-	MySQL               mySQLCmd             `cmd:"" group:"storage.nine.ch" name:"mysql" help:"Delete a MySQL instance."`
-	MySQLDatabase       mysqlDatabaseCmd     `cmd:"" group:"storage.nine.ch" name:"mysqldatabase" help:"Delete a MySQL database."`
-	Postgres            postgresCmd          `cmd:"" group:"storage.nine.ch" name:"postgres" help:"Delete a PostgreSQL instance."`
-	PostgresDatabase    postgresDatabaseCmd  `cmd:"" group:"storage.nine.ch" name:"postgresdatabase" help:"Delete a PostgreSQL database."`
-	KeyValueStore       keyValueStoreCmd     `cmd:"" group:"storage.nine.ch" name:"keyvaluestore" aliases:"kvs" help:"Delete a KeyValueStore instance."`
-	OpenSearch          openSearchCmd        `cmd:"" group:"storage.nine.ch" name:"opensearch" aliases:"os" help:"Delete an OpenSearch cluster."`
-	CloudVirtualMachine cloudVMCmd           `cmd:"" group:"infrastructure.nine.ch" name:"cloudvirtualmachine" aliases:"cloudvm" help:"Delete a CloudVM."`
-	ServiceConnection   serviceConnectionCmd `cmd:"" group:"networking.nine.ch" name:"serviceconnection" aliases:"sc" help:"Delete a ServiceConnection."`
-	Bucket              bucketCmd            `cmd:"" group:"storage.nine.ch" name:"bucket" help:"Delete a Bucket."`
-	BucketUser          bucketUserCmd        `cmd:"" group:"storage.nine.ch" name:"bucketuser" aliases:"bu" help:"Delete a BucketUser."`
+	FromFile            fromFile             `cmd:"" group:"delete-general" default:"withargs" name:"-f <file>" help:"Delete any resource from a yaml or json file."`
+	VCluster            vclusterCmd          `cmd:"" group:"delete-infra" name:"vcluster" api-resource:"kubernetesclusters" help:"Delete a vcluster."`
+	APIServiceAccount   apiServiceAccountCmd `cmd:"" group:"delete-access" name:"apiserviceaccount" aliases:"asa" help:"Delete an API Service Account."`
+	Project             projectCmd           `cmd:"" group:"delete-access" name:"project" aliases:"proj" help:"Delete a Project."`
+	ProjectConfig       configCmd            `cmd:"" group:"delete-apps" name:"project-config" aliases:"config" help:"Delete a deplo.io Project Configuration."`
+	Application         applicationCmd       `cmd:"" group:"delete-apps" name:"application" aliases:"app,application" help:"Delete a deplo.io Application."`
+	MySQL               mySQLCmd             `cmd:"" group:"delete-storage" name:"mysql" help:"Delete a MySQL instance."`
+	MySQLDatabase       mysqlDatabaseCmd     `cmd:"" group:"delete-storage" name:"mysqldatabase" help:"Delete a MySQL database."`
+	Postgres            postgresCmd          `cmd:"" group:"delete-storage" name:"postgres" help:"Delete a PostgreSQL instance."`
+	PostgresDatabase    postgresDatabaseCmd  `cmd:"" group:"delete-storage" name:"postgresdatabase" help:"Delete a PostgreSQL database."`
+	KeyValueStore       keyValueStoreCmd     `cmd:"" group:"delete-storage" name:"keyvaluestore" aliases:"kvs" help:"Delete a KeyValueStore instance."`
+	OpenSearch          openSearchCmd        `cmd:"" group:"delete-storage" name:"opensearch" aliases:"os" help:"Delete an OpenSearch cluster."`
+	CloudVirtualMachine cloudVMCmd           `cmd:"" group:"delete-infra" name:"cloudvirtualmachine" aliases:"cloudvm" help:"Delete a CloudVM."`
+	ServiceConnection   serviceConnectionCmd `cmd:"" group:"delete-network" name:"serviceconnection" aliases:"sc" help:"Delete a ServiceConnection."`
+	StaticEgress        staticEgressCmd      `cmd:"" group:"delete-network" name:"staticegress" aliases:"se" help:"Delete a StaticEgress."`
+	Bucket              bucketCmd            `cmd:"" group:"delete-storage" name:"bucket" help:"Delete a Bucket."`
+	BucketUser          bucketUserCmd        `cmd:"" group:"delete-storage" name:"bucketuser" aliases:"bu" help:"Delete a BucketUser."`
+	Grafana             grafanaCmd           `cmd:"" group:"delete-observability" name:"grafana" help:"Delete a Grafana instance."`
 }
 
-type resourceCmd struct {
+// ResourceCmd is the shared base for the delete sub-commands.
+//
+// It has to be exported so that Kong initializes the embedded
+// [format.Writer], see [format.Writer.BeforeApply].
+type ResourceCmd struct {
 	format.Writer `kong:"-"`
 	format.Reader `kong:"-"`
-	Name          string        `arg:"" completion-predictor:"resource_name" help:"Name of the resource to delete."`
+	Name          string        `arg:"" completion-predictor:"client:resource_name" help:"Name of the resource to delete."`
 	Force         bool          `default:"false" help:"Do not ask for confirmation of deletion."`
 	Wait          bool          `default:"true" help:"Wait until resource is fully deleted."`
 	WaitTimeout   time.Duration `default:"5m" help:"Duration to wait for the deletion. Only relevant if wait is set."`
@@ -46,7 +50,7 @@ type resourceCmd struct {
 
 // BeforeApply initializes Writer and Reader from Kong's bound io.Writer and io.Reader.
 // Because Kong wont apply hooks on embedded structs.
-func (cmd *resourceCmd) BeforeApply(writer io.Writer, reader io.Reader) error {
+func (cmd *ResourceCmd) BeforeApply(writer io.Writer, reader io.Reader) error {
 	return errors.Join(
 		cmd.Writer.BeforeApply(writer),
 		cmd.Reader.BeforeApply(reader),
@@ -72,7 +76,7 @@ type deleter struct {
 // deleterOption allows to set options for the deletion
 type deleterOption func(*deleter)
 
-func (cmd *resourceCmd) newDeleter(
+func (cmd *ResourceCmd) newDeleter(
 	mg resource.Managed,
 	kind string,
 	opts ...deleterOption,

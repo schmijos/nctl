@@ -33,32 +33,35 @@ import (
 
 const logPrintTimeout = 10 * time.Second
 
+const DefaultReplicas = 2
+
 // note: when adding/changing fields here also make sure to carry it over to
 // update/application.go.
 type applicationCmd struct {
-	resourceCmd
-	Git                      gitConfig         `embed:"" prefix:"git-"`
-	FromLocalDir             *string           `help:"Path to a local directory to upload and deploy. The directory is zipped and uploaded to a one-time-use git repository. Mutually exclusive with --git-url." xor:"git-source" name:"from-local-dir" placeholder:"."`
-	Size                     *string           `help:"Size of the application (defaults to \"${app_default_size}\")." placeholder:"${app_default_size}"`
-	Port                     *int32            `help:"Port the application is listening on (defaults to ${app_default_port})." placeholder:"${app_default_port}"`
-	HealthProbe              healthProbe       `embed:"" prefix:"health-probe-"`
-	Replicas                 *int32            `help:"Amount of replicas of the running application (defaults to ${app_default_replicas})." placeholder:"${app_default_replicas}"`
-	Hosts                    []string          `help:"Host names where the application can be accessed. If empty, the application will just be accessible on a generated host name on the deploio.app domain."`
-	BasicAuth                *bool             `help:"Enable/Disable basic authentication for the application (defaults to ${app_default_basic_auth})." placeholder:"${app_default_basic_auth}"`
-	Env                      map[string]string `help:"Environment variables which are passed to the application at runtime."`
-	SensitiveEnv             map[string]string `help:"Sensitive environment variables which are passed to the application at runtime."`
-	BuildEnv                 map[string]string `help:"Environment variables which are passed to the application build process."`
-	SensitiveBuildEnv        map[string]string `help:"Sensitive environment variables which are passed to the application build process."`
-	DeployJob                deployJob         `embed:"" prefix:"deploy-job-"`
-	WorkerJob                workerJob         `embed:"" prefix:"worker-job-"`
-	ScheduledJob             scheduledJob      `embed:"" prefix:"scheduled-job-"`
-	GitInformationServiceURL string            `help:"URL of the git information service." default:"https://git-info.deplo.io" env:"GIT_INFORMATION_SERVICE_URL" hidden:""`
-	GitOnceURL               string            `help:"URL of the gitonce upload service." default:"${gitonce_default_url}" env:"GITONCE_URL" hidden:""`
-	SkipRepoAccessCheck      bool              `help:"Skip the git repository access check." default:"false"`
-	Debug                    bool              `help:"Enable debug messages." default:"false"`
-	Language                 string            `help:"${app_language_help} Possible values: ${enum}" enum:"ruby,php,python,golang,nodejs,static," default:""`
-	DockerfileBuild          dockerfileBuild   `embed:""`
-	BuildpackStack           string            `help:"${app_buildpack_stack_help} Possible values: ${enum}" enum:"paketo,heroku," default:""`
+	ResourceCmd
+	Git                      gitConfig                           `embed:"" prefix:"git-"`
+	FromLocalDir             *string                             `help:"Path to a local directory to upload and deploy. The directory is zipped and uploaded to a one-time-use git repository. Mutually exclusive with --git-url." xor:"git-source" name:"from-local-dir" placeholder:"."`
+	Size                     *string                             `help:"Size of the application (defaults to \"${app_default_size}\")." placeholder:"${app_default_size}"`
+	Port                     *int32                              `help:"Port the application is listening on (defaults to ${app_default_port})." placeholder:"${app_default_port}"`
+	HealthProbe              healthProbe                         `embed:"" prefix:"health-probe-"`
+	Replicas                 int32                               `help:"Amount of replicas of the running application (defaults to ${app_default_replicas})." placeholder:"${app_default_replicas}" default:"${app_default_replicas}"`
+	Hosts                    []string                            `help:"Host names where the application can be accessed. If empty, the application will just be accessible on a generated host name on the deploio.app domain."`
+	BasicAuth                *bool                               `help:"Enable/Disable basic authentication for the application (defaults to ${app_default_basic_auth})." placeholder:"${app_default_basic_auth}"`
+	Env                      map[string]string                   `help:"Environment variables which are passed to the application at runtime."`
+	SensitiveEnv             map[string]string                   `help:"Sensitive environment variables which are passed to the application at runtime."`
+	BuildEnv                 map[string]string                   `help:"Environment variables which are passed to the application build process."`
+	SensitiveBuildEnv        map[string]string                   `help:"Sensitive environment variables which are passed to the application build process."`
+	Service                  []application.NamedServiceReference `sep:"none" help:"Service reference in the form name=kind/target-name. Credentials will be automatically injected as environment variables. Repeat the flag to pass more than one service."`
+	DeployJob                deployJob                           `embed:"" prefix:"deploy-job-"`
+	WorkerJob                workerJob                           `embed:"" prefix:"worker-job-"`
+	ScheduledJob             scheduledJob                        `embed:"" prefix:"scheduled-job-"`
+	GitInformationServiceURL string                              `help:"URL of the git information service." default:"https://git-info.deplo.io" env:"GIT_INFORMATION_SERVICE_URL" hidden:""`
+	GitOnceURL               string                              `help:"URL of the gitonce upload service." default:"${gitonce_default_url}" env:"GITONCE_URL" hidden:""`
+	SkipRepoAccessCheck      bool                                `help:"Skip the git repository access check." default:"false"`
+	Debug                    bool                                `help:"Enable debug messages." default:"false"`
+	Language                 string                              `help:"${app_language_help} Possible values: ${enum}" enum:"ruby,php,python,golang,nodejs,static," default:""`
+	DockerfileBuild          dockerfileBuild                     `embed:""`
+	BuildpackStack           string                              `help:"${app_buildpack_stack_help} Possible values: ${enum}" enum:"paketo,heroku," default:""`
 }
 
 type gitConfig struct {
@@ -68,7 +71,7 @@ type gitConfig struct {
 	Username              *string `help:"Username to use when authenticating to the git repository over HTTPS." env:"GIT_USERNAME"`
 	Password              *string `help:"Password to use when authenticating to the git repository over HTTPS. In case of GitHub or GitLab, this can also be an access token." env:"GIT_PASSWORD"`
 	SSHPrivateKey         *string `help:"Private key in PEM format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY" xor:"SSH_KEY"`
-	SSHPrivateKeyFromFile *string `help:"Path to a file containing a private key in PEM format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY_FROM_FILE" xor:"SSH_KEY" completion-predictor:"file"`
+	SSHPrivateKeyFromFile *string `help:"Path to a file containing a private key in PEM format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY_FROM_FILE" xor:"SSH_KEY" completion-predictor:"local:file"`
 }
 
 type healthProbe struct {
@@ -93,7 +96,8 @@ type scheduledJob struct {
 	Command  string        `help:"Command to execute to start the scheduled job." placeholder:"\"bundle exec rails runner\""`
 	Name     string        `help:"Name of the scheduled job job to add." placeholder:"scheduled-1"`
 	Size     *string       `help:"Size (resources) of the scheduled job (defaults to \"${app_default_size}\")." placeholder:"${app_default_size}"`
-	Schedule string        `help:"Cron notation string for the scheduled job (defaults to \"* * * * *\")." placeholder:"* * * * *"`
+	Schedule string        `help:"Cron notation string for the scheduled job (defaults to \"* * * * *\")." placeholder:"\"* * * * *\""`
+	TimeZone *string       `help:"Time zone the schedule is evaluated in, e.g. \"Europe/Zurich\" (defaults to \"UTC\")." placeholder:"Europe/Zurich"`
 	Retries  int32         `default:"${app_default_scheduled_job_retries}" help:"How many times the job will be restarted on failure. Default is ${app_default_scheduled_job_retries} and maximum 5."`
 	Timeout  time.Duration `default:"${app_default_scheduled_job_timeout}" help:"Timeout of the job. Default is ${app_default_scheduled_job_timeout}, minimum is 1 minute and maximum is 30 minutes."`
 }
@@ -366,6 +370,9 @@ func (cmd *applicationCmd) config() apps.Config {
 		if cmd.ScheduledJob.Size != nil {
 			scheduledJob.Size = new(apps.ApplicationSize(*cmd.ScheduledJob.Size))
 		}
+		if cmd.ScheduledJob.TimeZone != nil {
+			scheduledJob.TimeZone = *cmd.ScheduledJob.TimeZone
+		}
 		config.ScheduledJobs = append(config.ScheduledJobs, scheduledJob)
 	}
 
@@ -375,9 +382,7 @@ func (cmd *applicationCmd) config() apps.Config {
 	if cmd.Port != nil {
 		config.Port = cmd.Port
 	}
-	if cmd.Replicas != nil {
-		config.Replicas = cmd.Replicas
-	}
+	config.Replicas = &cmd.Replicas
 
 	cmd.HealthProbe.applyCreate(&config)
 
@@ -421,6 +426,7 @@ func (cmd *applicationCmd) newApplication(project string) *apps.Application {
 				Hosts:    cmd.Hosts,
 				Config:   cmd.config(),
 				BuildEnv: combineEnvVars(cmd.BuildEnv, cmd.SensitiveBuildEnv),
+				Services: application.ServicesFromReferences(cmd.Service, project),
 				DockerfileBuild: apps.DockerfileBuild{
 					Enabled:        cmd.DockerfileBuild.Enabled,
 					DockerfilePath: cmd.DockerfileBuild.Path,
@@ -685,8 +691,7 @@ func (cmd *applicationCmd) printErrorDetails(
 	client *api.Client,
 	err error,
 ) error {
-	var buildErr buildError
-	if errors.As(err, &buildErr) {
+	if buildErr, ok := errors.AsType[buildError](err); ok {
 		cmd.Infof("❌", "Your build has failed with status %q. Here are the last %v lines of the log:",
 			buildErr.Build().Status.AtProvider.BuildStatus,
 			errorLogLines,
@@ -694,8 +699,7 @@ func (cmd *applicationCmd) printErrorDetails(
 		return printBuildLogs(ctx, client, buildErr.Build())
 	}
 
-	var releaseErr releaseError
-	if errors.As(err, &releaseErr) {
+	if releaseErr, ok := errors.AsType[releaseError](err); ok {
 		cmd.Infof("❌", "Your release has failed with status %q. Here are the last %v lines of the log:",
 			releaseErr.Release().Status.AtProvider.ReleaseStatus,
 			errorLogLines,
@@ -735,10 +739,7 @@ func ApplicationKongVars() (kong.Vars, error) {
 		return nil, errors.New("no default application port found")
 	}
 	result["app_default_port"] = strconv.Itoa(int(*apps.DefaultConfig.Port))
-	if apps.DefaultConfig.Replicas == nil {
-		return nil, errors.New("no default application replicas found")
-	}
-	result["app_default_replicas"] = strconv.Itoa(int(*apps.DefaultConfig.Replicas))
+	result["app_default_replicas"] = strconv.Itoa(DefaultReplicas)
 	if apps.DefaultConfig.EnableBasicAuth == nil {
 		return nil, errors.New("no default application basic authentication settings found")
 	}
@@ -758,7 +759,7 @@ func ApplicationKongVars() (kong.Vars, error) {
 		"named Dockerfile will be searched in the application code root directory."
 	result["app_dockerfile_build_context_help"] = "Defines the build context. If left empty, the application code root directory will be used as build context."
 	result["app_buildpack_stack_help"] = "BuildpackStack sets the stack of buildpacks to use for building the application. " +
-		"If left empty, the default stack (paketo) will be used. "
+		"If left empty, the default stack (heroku) will be used. "
 	result["gitonce_default_url"] = gitonce.DefaultUploadURL
 	return result, nil
 }

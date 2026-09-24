@@ -8,14 +8,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"reflect"
 	"runtime/debug"
 	"strings"
 	"syscall"
 
 	"github.com/alecthomas/kong"
-	completion "github.com/jotaen/kong-completion"
-	management "github.com/ninech/apis/management/v1alpha1"
 	"github.com/ninech/nctl/api"
 	"github.com/ninech/nctl/apply"
 	"github.com/ninech/nctl/auth"
@@ -25,17 +22,17 @@ import (
 	"github.com/ninech/nctl/edit"
 	"github.com/ninech/nctl/exec"
 	"github.com/ninech/nctl/get"
+	"github.com/ninech/nctl/internal/apifield"
 	"github.com/ninech/nctl/internal/cli"
+	"github.com/ninech/nctl/internal/completion"
 	"github.com/ninech/nctl/internal/format"
 	"github.com/ninech/nctl/logs"
-	"github.com/ninech/nctl/predictor"
 	"github.com/ninech/nctl/update"
-	"github.com/posener/complete"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type flags struct {
-	Project        string           `help:"Limit commands to a specific project." short:"p" completion-predictor:"project_name"`
+	Project        string           `help:"Limit commands to a specific project." short:"p" completion-predictor:"client:project_name"`
 	APICluster     string           `help:"Context name of the API cluster." default:"${api_cluster}" env:"NCTL_API_CLUSTER" hidden:""`
 	LogAPIAddress  string           `help:"Address of the deplo.io logging API server." default:"https://logs.deplo.io" env:"NCTL_LOG_ADDR" hidden:""`
 	LogAPIInsecure bool             `help:"Don't verify TLS connection to the logging API server." hidden:"" default:"false" env:"NCTL_LOG_INSECURE"`
@@ -45,17 +42,21 @@ type flags struct {
 
 type rootCommand struct {
 	flags
-	Get         get.Cmd               `cmd:"" help:"Get resource."`
-	Auth        auth.Cmd              `cmd:"" help:"Authenticate with resource."`
-	Completions completion.Completion `cmd:"" help:"Print shell completions."`
-	Create      create.Cmd            `cmd:"" help:"Create resource."`
-	Copy        copy.Cmd              `cmd:"" help:"Copy resource."`
-	Apply       apply.Cmd             `cmd:"" help:"Apply resource."`
-	Delete      delete.Cmd            `cmd:"" help:"Delete resource."`
-	Logs        logs.Cmd              `cmd:"" help:"Get logs of resource."`
-	Update      update.Cmd            `cmd:"" help:"Update resource."`
-	Exec        exec.Cmd              `cmd:"" help:"Execute a command."`
-	Edit        edit.Cmd              `cmd:"" help:"Edit a resource."`
+
+	// Resource management
+	Get    get.Cmd    `cmd:"" help:"List resources across Nine APIs and watch them for changes." group:"verbs"`
+	Create create.Cmd `cmd:"" help:"Create resources from YAML or JSON files, or from resource-specific subcommands." group:"verbs"`
+	Apply  apply.Cmd  `cmd:"" help:"Apply resources declaratively from YAML or JSON files." group:"verbs"`
+	Update update.Cmd `cmd:"" help:"Update existing resources using resource-specific subcommands." group:"verbs"`
+	Delete delete.Cmd `cmd:"" help:"Delete resources by file or through resource-specific subcommands." group:"verbs"`
+	Edit   edit.Cmd   `cmd:"" help:"Edit supported resources interactively in your configured editor." group:"verbs"`
+
+	// Utility & interaction
+	Auth        auth.Cmd       `cmd:"" help:"Log in, switch organization or project context, and inspect your current session." group:"utils"`
+	Logs        logs.Cmd       `cmd:"" help:"Show logs for supported deplo.io resources such as applications and builds." group:"utils"`
+	Exec        exec.Cmd       `cmd:"" help:"Run a command or open a shell in a deplo.io application." group:"utils"`
+	Copy        copy.Cmd       `cmd:"" help:"Copy supported resources such as deplo.io applications." group:"utils"`
+	Completions completion.Cmd `cmd:"" help:"Generate shell completion commands for your current shell." group:"utils"`
 }
 
 const (
@@ -76,36 +77,16 @@ func main() {
 	defer cancel()
 	setupSignalHandler(ctx, cancel)
 
-	kongVars, err := kongVariables()
+	cmd := &rootCommand{}
+	parser, err := newParser(ctx, cmd, writer, reader)
 	if err != nil {
 		fmt.Fprintln(writer, err)
 		os.Exit(1)
 	}
-	cmd := &rootCommand{}
-	parser := kong.Must(
-		cmd,
-		kong.Name(cli.Name),
-		kong.Description(
-			"Interact with Nine API resources. See https://docs.nineapis.ch for the full API docs.",
-		),
-		kong.UsageOnError(),
-		kong.PostBuild(format.InterpolateFlagPlaceholders(kongVars)),
-		kongVars,
-		kong.BindTo(ctx, (*context.Context)(nil)),
-		kong.BindTo(writer, (*io.Writer)(nil)),
-		kong.BindTo(reader, (*io.Reader)(nil)),
-	)
-
-	apiClientRequired := !noAPIClientRequired(strings.Join(os.Args[1:], " "))
-	predictors := append([]completion.Option{
-		completion.WithPredictor("file", complete.PredictFiles("*")),
-	}, clientPredictors(ctx, apiClientRequired)...)
-	completion.Register(parser, predictors...)
 
 	kongCtx, err := parser.Parse(os.Args[1:])
 	if err != nil {
-		var parseErr *kong.ParseError
-		if errors.As(err, &parseErr) {
+		if parseErr, ok := errors.AsType[*kong.ParseError](err); ok {
 			// do not error on missing command/argument.
 			// Print Usage + friendly message instead.
 			if parseErr.Context.Error == nil {
@@ -127,7 +108,9 @@ func main() {
 		kong.BindTo(writer, (*io.Writer)(nil)),
 		kong.BindTo(reader, (*io.Reader)(nil)),
 	}
-	if apiClientRequired {
+	// Kong exits during Parse for --help and --version, so those cases
+	// never reach here. Only auth and completions commands remain.
+	if !noAPIClientRequired(kongCtx.Command()) {
 		client, err := api.New(
 			ctx,
 			cmd.APICluster,
@@ -162,8 +145,7 @@ func main() {
 			}
 		}
 
-		var cliErr *cli.Error
-		if errors.As(err, &cliErr) {
+		if cliErr, ok := errors.AsType[*cli.Error](err); ok {
 			fmt.Fprintln(writer, err.Error())
 			kongCtx.Exit(cliErr.ExitCode())
 			return
@@ -173,33 +155,86 @@ func main() {
 	}
 }
 
-func clientPredictors(ctx context.Context, apiClientRequired bool) []completion.Option {
-	// complete needs all used predictors to be defined, so we just use
-	// [complete.PredictNothing] for those that would require an API client.
-	nothing := []completion.Option{
-		completion.WithPredictor("resource_name", complete.PredictNothing),
-		completion.WithPredictor("project_name", complete.PredictNothing),
-	}
-
-	if !apiClientRequired {
-		return nothing
-	}
-
-	client, err := predictor.NewClient(ctx, defaultAPICluster)
+// newParser builds the Kong parser for cmd. The given writer and reader are
+// bound as [io.Writer] and [io.Reader] so that commands can print output and
+// prompt for input.
+func newParser(ctx context.Context, cmd *rootCommand, w io.Writer, r io.Reader) (*kong.Kong, error) {
+	kongVars, err := kongVariables()
 	if err != nil {
-		return nothing
+		return nil, err
 	}
 
-	return []completion.Option{
-		completion.WithPredictor("resource_name", predictor.NewResourceName(client)),
-		completion.WithPredictor("project_name", predictor.NewResourceNameWithKind(client,
-			management.SchemeGroupVersion.WithKind(reflect.TypeFor[management.ProjectList]().Name())),
+	parser, err := kong.New(
+		cmd,
+		kong.Name(cli.Name),
+		kong.Description(
+			"Interact with Nine API resources. See https://docs.nineapis.ch for the full API docs.",
 		),
+		kong.Groups{
+			"verbs": "Resource Management Commands",
+			"utils": "Utility Commands",
+
+			"get-general": "General",
+			"get-access":  "Project & Access",
+			"get-infra":   "Infrastructure",
+			"get-apps":    "Applications",
+			"get-storage": "Databases & Object Storage",
+			"get-network": "Networking",
+
+			"create-general": "General",
+			"create-access":  "Project & Access",
+			"create-infra":   "Infrastructure",
+			"create-apps":    "Applications",
+			"create-storage": "Databases & Object Storage",
+			"create-network": "Networking",
+
+			"update-access":  "Project & Access",
+			"update-infra":   "Infrastructure",
+			"update-apps":    "Applications",
+			"update-storage": "Databases & Object Storage",
+			"update-network": "Networking",
+
+			"edit-access":  "Project & Access",
+			"edit-infra":   "Infrastructure",
+			"edit-apps":    "Applications",
+			"edit-storage": "Databases & Object Storage",
+
+			"delete-general": "General",
+			"delete-access":  "Project & Access",
+			"delete-infra":   "Infrastructure",
+			"delete-apps":    "Applications",
+			"delete-storage": "Databases & Object Storage",
+			"delete-network": "Networking",
+		},
+		kong.ConfigureHelp(kong.HelpOptions{
+			Compact:             true,
+			NoExpandSubcommands: true,
+		}),
+		kong.UsageOnError(),
+		kong.PostBuild(format.InterpolateFlagPlaceholders(kongVars)),
+		kong.PostBuild(apifield.Apply()),
+		kongVars,
+		kong.BindTo(ctx, (*context.Context)(nil)),
+		kong.BindTo(w, (*io.Writer)(nil)),
+		kong.BindTo(r, (*io.Reader)(nil)),
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	// Completion has to be registered before parsing, so cmd is still empty
+	// here. The predictors resolve the flags they need off the parser model
+	// and the command line being completed instead.
+	if err := completion.Register(ctx, parser); err != nil {
+		return nil, err
+	}
+
+	return parser, nil
 }
 
 // noAPIClientRequired returns true if the command does not need to (or can't)
-// require an API client.
+// require an API client. The command parameter is the resolved command path
+// from [kong.Context.Command].
 func noAPIClientRequired(command string) bool {
 	return matchCommand(command, auth.CmdName, format.LoginCommand) ||
 		matchCommand(command, auth.CmdName, format.LogoutCommand) ||
@@ -241,17 +276,10 @@ func kongVariables() (kong.Vars, error) {
 	if err := merge(
 		result,
 		appCreateKongVars,
-		create.CloudVMKongVars(),
 		create.MySQLKongVars(),
-		create.MySQLDatabaseKongVars(),
-		create.PostgresKongVars(),
-		create.PostgresDatabaseKongVars(),
-		create.KeyValueStoreKongVars(),
-		create.OpenSearchKongVars(),
 		create.ServiceConnectionKongVars(),
 		create.BucketKongVars(),
 		update.BucketKongVars(),
-		create.BucketUserKongVars(),
 		auth.LoginKongVars(),
 		logs.KongVars(),
 	); err != nil {

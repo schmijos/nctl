@@ -25,24 +25,26 @@ import (
 
 type Cmd struct {
 	output
-	Clusters            clustersCmd           `cmd:"" group:"infrastructure.nine.ch" aliases:"cluster,vcluster" help:"Get Kubernetes Clusters."`
-	APIServiceAccounts  apiServiceAccountsCmd `cmd:"" group:"iam.nine.ch" name:"apiserviceaccounts" aliases:"asa" help:"Get API Service Accounts."`
-	Projects            projectCmd            `cmd:"" group:"management.nine.ch" name:"projects" aliases:"proj" help:"Get Projects."`
-	Applications        applicationsCmd       `cmd:"" group:"deplo.io" name:"applications" aliases:"app,apps,application" help:"Get deplo.io Applications."`
-	Builds              buildCmd              `cmd:"" group:"deplo.io" name:"builds" aliases:"build" help:"Get deplo.io Builds."`
-	Releases            releasesCmd           `cmd:"" group:"deplo.io" name:"releases" aliases:"release" help:"Get deplo.io Releases."`
-	Configs             configsCmd            `cmd:"" group:"deplo.io" name:"configs" aliases:"config" help:"Get deplo.io Project Configuration."`
-	MySQL               mySQLCmd              `cmd:"" group:"storage.nine.ch" name:"mysql" help:"Get MySQL instances."`
-	MySQLDatabases      mysqlDatabaseCmd      `cmd:"" group:"storage.nine.ch" name:"mysqldatabases" aliases:"mysqldatabase" help:"Get MySQL databases."`
-	OpenSearch          openSearchCmd         `cmd:"" group:"storage.nine.ch" name:"opensearch" aliases:"os" help:"Get OpenSearch clusters."`
-	Postgres            postgresCmd           `cmd:"" group:"storage.nine.ch" name:"postgres" help:"Get PostgreSQL instances."`
-	PostgresDatabases   postgresDatabaseCmd   `cmd:"" group:"storage.nine.ch" name:"postgresdatabases" aliases:"postgresdatabase" help:"Get PostgreSQL databases."`
-	KeyValueStore       keyValueStoreCmd      `cmd:"" group:"storage.nine.ch" name:"keyvaluestore" aliases:"kvs" help:"Get KeyValueStore instances."`
-	All                 allCmd                `cmd:"" name:"all" help:"Get project content."`
-	CloudVirtualMachine cloudVMCmd            `cmd:"" group:"infrastructure.nine.ch" name:"cloudvirtualmachine" aliases:"cloudvm" help:"Get a CloudVM."`
-	ServiceConnection   serviceConnectionCmd  `cmd:"" group:"networking.nine.ch" name:"serviceconnection" aliases:"sc,serviceconnections" help:"Get a ServiceConnection."`
-	Bucket              bucketCmd             `cmd:"" group:"storage.nine.ch" name:"bucket" help:"Get Bucket instances."`
-	BucketUser          bucketUserCmd         `cmd:"" group:"storage.nine.ch" name:"bucketuser" aliases:"bu" help:"Get BucketUser instances."`
+	All                 allCmd                `cmd:"" name:"all" group:"get-general" help:"Get project content."`
+	Clusters            clustersCmd           `cmd:"" group:"get-infra" aliases:"cluster,vcluster" api-resource:"kubernetesclusters" help:"Get Kubernetes Clusters."`
+	APIServiceAccounts  apiServiceAccountsCmd `cmd:"" group:"get-access" name:"apiserviceaccounts" aliases:"asa" help:"Get API Service Accounts."`
+	Projects            projectCmd            `cmd:"" group:"get-access" name:"projects" aliases:"proj" help:"Get Projects."`
+	Applications        applicationsCmd       `cmd:"" group:"get-apps" name:"applications" aliases:"app,apps,application" help:"Get deplo.io Applications."`
+	Builds              buildCmd              `cmd:"" group:"get-apps" name:"builds" aliases:"build" help:"Get deplo.io Builds."`
+	Releases            releasesCmd           `cmd:"" group:"get-apps" name:"releases" aliases:"release" help:"Get deplo.io Releases."`
+	ProjectConfig       configsCmd            `cmd:"" group:"get-apps" name:"project-config" aliases:"config,configs,project-configs" help:"Get deplo.io Project Configuration."`
+	MySQL               mySQLCmd              `cmd:"" group:"get-storage" name:"mysql" help:"Get MySQL instances."`
+	MySQLDatabases      mysqlDatabaseCmd      `cmd:"" group:"get-storage" name:"mysqldatabases" aliases:"mysqldatabase" help:"Get MySQL databases."`
+	OpenSearch          openSearchCmd         `cmd:"" group:"get-storage" name:"opensearch" aliases:"os" help:"Get OpenSearch clusters."`
+	Postgres            postgresCmd           `cmd:"" group:"get-storage" name:"postgres" help:"Get PostgreSQL instances."`
+	PostgresDatabases   postgresDatabaseCmd   `cmd:"" group:"get-storage" name:"postgresdatabases" aliases:"postgresdatabase" help:"Get PostgreSQL databases."`
+	KeyValueStore       keyValueStoreCmd      `cmd:"" group:"get-storage" name:"keyvaluestore" aliases:"kvs" help:"Get KeyValueStore instances."`
+	CloudVirtualMachine cloudVMCmd            `cmd:"" group:"get-infra" name:"cloudvirtualmachine" aliases:"cloudvm" help:"Get a CloudVM."`
+	ServiceConnection   serviceConnectionCmd  `cmd:"" group:"get-network" name:"serviceconnection" aliases:"sc,serviceconnections" help:"Get a ServiceConnection."`
+	StaticEgress        staticEgressCmd       `cmd:"" group:"get-network" name:"staticegress" aliases:"se,staticegresses" help:"Get StaticEgress resources."`
+	Bucket              bucketCmd             `cmd:"" group:"get-storage" name:"bucket" help:"Get Bucket instances."`
+	BucketUser          bucketUserCmd         `cmd:"" group:"get-storage" name:"bucketuser" aliases:"bu" help:"Get BucketUser instances."`
+	Grafana             grafanaCmd            `cmd:"" group:"get-observability" name:"grafana" help:"Get Grafana instances."`
 }
 
 type output struct {
@@ -54,9 +56,14 @@ type output struct {
 	tabWriter     *tabwriter.Writer
 }
 
-type resourceCmd struct {
+// ResourceCmd is the shared base for the get sub-commands that take a single
+// resource name.
+//
+// It has to be exported so that Kong initializes the embedded
+// [format.Writer], see [format.Writer.BeforeApply].
+type ResourceCmd struct {
 	format.Writer `kong:"-"`
-	Name          string `arg:"" completion-predictor:"resource_name" help:"Name of the resource to get. If omitted all in the project will be listed." default:""`
+	Name          string `arg:"" completion-predictor:"client:resource_name" help:"Name of the resource to get. If omitted all in the project will be listed." default:""`
 }
 
 type outputFormat string
@@ -156,7 +163,7 @@ func (out *output) writeTabRow(project string, row ...string) {
 }
 
 func (out *output) notFound(kind, project string) error {
-	if out.Format == jsonOut {
+	if out.Format == jsonOut || out.Format == yamlOut {
 		out.Printf("[]")
 		return nil
 	}
@@ -178,7 +185,7 @@ func (out *output) notFound(kind, project string) error {
 	return err
 }
 
-func getConnectionSecretMap(ctx context.Context, client *api.Client, mg resource.Managed) (map[string][]byte, error) {
+func ConnectionSecretMap(ctx context.Context, client *api.Client, mg resource.Managed) (map[string][]byte, error) {
 	secret, err := client.GetConnectionSecret(ctx, mg)
 	if err != nil {
 		return nil, err
@@ -187,8 +194,8 @@ func getConnectionSecretMap(ctx context.Context, client *api.Client, mg resource
 	return secret.Data, nil
 }
 
-func getConnectionSecret(ctx context.Context, client *api.Client, key string, mg resource.Managed) (string, error) {
-	secrets, err := getConnectionSecretMap(ctx, client, mg)
+func connectionSecret(ctx context.Context, client *api.Client, key string, mg resource.Managed) (string, error) {
+	secrets, err := ConnectionSecretMap(ctx, client, mg)
 	if err != nil {
 		return "", fmt.Errorf("unable to get connection secret: %w", err)
 	}
@@ -201,14 +208,14 @@ func getConnectionSecret(ctx context.Context, client *api.Client, key string, mg
 	return string(content), nil
 }
 
-func (cmd *resourceCmd) printSecret(
+func (cmd *ResourceCmd) printSecret(
 	ctx context.Context,
 	client *api.Client,
 	mg resource.Managed,
 	out *output,
 	field func(string, string) string,
 ) error {
-	secrets, err := getConnectionSecretMap(ctx, client, mg)
+	secrets, err := ConnectionSecretMap(ctx, client, mg)
 	if err != nil {
 		return err
 	}
@@ -220,14 +227,14 @@ func (cmd *resourceCmd) printSecret(
 	return nil
 }
 
-func (cmd *resourceCmd) printCredentials(
+func (cmd *ResourceCmd) printCredentials(
 	ctx context.Context,
 	client *api.Client,
 	mg resource.Managed,
 	out *output,
 	filter func(key string) bool,
 ) error {
-	data, err := getConnectionSecretMap(ctx, client, mg)
+	data, err := ConnectionSecretMap(ctx, client, mg)
 	if err != nil {
 		return err
 	}
@@ -264,7 +271,7 @@ func (cmd *resourceCmd) printCredentials(
 	return nil
 }
 
-func printBase64(out io.Writer, s string) error {
+func WriteBase64(out io.Writer, s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil

@@ -1,14 +1,16 @@
-package predictor
+package completion
 
 import (
 	"bytes"
 	"strconv"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/posener/complete"
+	"github.com/stretchr/testify/require"
 )
 
-func TestFindProjectWithCompleteLibrary(t *testing.T) {
+func TestProjectFinderWithCompleteLibrary(t *testing.T) {
 	tests := []struct {
 		name        string
 		compLine    string
@@ -58,27 +60,26 @@ func TestFindProjectWithCompleteLibrary(t *testing.T) {
 				},
 			}
 
-			// Simulate shell completion
 			t.Setenv("COMP_LINE", tt.compLine)
 			t.Setenv("COMP_POINT", strconv.Itoa(len(tt.compLine)))
 
 			cmp := complete.New("nctl", cmd)
-			cmp.Out = &bytes.Buffer{} // discard output
+			cmp.Out = &bytes.Buffer{}
 			cmp.Complete()
 
 			if !capture.called {
 				t.Fatal("predictor was not called")
 			}
 
-			gotProject, _ := findProject(capture.captured)
+			gotProject, _ := testProjectFinder(t).find(capture.captured)
 			if gotProject != tt.wantProject {
-				t.Errorf("findProject() = %q, want %q", gotProject, tt.wantProject)
+				t.Errorf("find() = %q, want %q", gotProject, tt.wantProject)
 			}
 		})
 	}
 }
 
-func TestFindProjectIncomplete(t *testing.T) {
+func TestProjectFinderIncomplete(t *testing.T) {
 	tests := []struct {
 		name           string
 		compLine       string
@@ -105,13 +106,13 @@ func TestFindProjectIncomplete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			capture := &capturePredictor{predictions: []string{}}
 
-			// For incomplete flags, the completion happens at the exec level
+			// For incomplete flags, completion happens at the exec level
 			// (completing the project name), not at the positional arg level.
 			cmd := complete.Command{
 				Sub: map[string]complete.Command{
 					"exec": {
 						Flags: map[string]complete.Predictor{
-							"--project": capture, // capture here for incomplete flag tests
+							"--project": capture,
 							"-p":        capture,
 						},
 						Sub: map[string]complete.Command{
@@ -130,9 +131,9 @@ func TestFindProjectIncomplete(t *testing.T) {
 			cmp.Out = &bytes.Buffer{}
 			cmp.Complete()
 
-			_, gotIncomplete := findProject(capture.captured)
+			_, gotIncomplete := testProjectFinder(t).find(capture.captured)
 			if gotIncomplete != tt.wantIncomplete {
-				t.Errorf("findProject() incomplete = %v, want %v (LastCompleted=%q)",
+				t.Errorf("find() incomplete = %v, want %v (LastCompleted=%q)",
 					gotIncomplete, tt.wantIncomplete, capture.captured.LastCompleted)
 			}
 		})
@@ -152,68 +153,38 @@ func (c *capturePredictor) Predict(args complete.Args) []string {
 	return c.predictions
 }
 
-func TestFindProjectInSlice(t *testing.T) {
+func TestProjectFinderWithoutFlag(t *testing.T) {
 	t.Parallel()
+	is := require.New(t)
 
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{
-			name: "empty args",
-			args: []string{},
-			want: "",
-		},
-		{
-			name: "no project flag",
-			args: []string{"nctl", "get", "applications"},
-			want: "",
-		},
-		{
-			name: "short flag with value",
-			args: []string{"nctl", "-p", "myproject", "get", "applications"},
-			want: "myproject",
-		},
-		{
-			name: "long flag with value",
-			args: []string{"nctl", "--project", "myproject", "get", "applications"},
-			want: "myproject",
-		},
-		{
-			name: "flag at end with value",
-			args: []string{"nctl", "get", "applications", "-p", "myproject"},
-			want: "myproject",
-		},
-		{
-			name: "short flag without value (incomplete)",
-			args: []string{"nctl", "get", "applications", "-p"},
-			want: "",
-		},
-		{
-			name: "long flag without value (incomplete)",
-			args: []string{"nctl", "get", "applications", "--project"},
-			want: "",
-		},
-		{
-			name: "flag in middle of args",
-			args: []string{"nctl", "get", "-p", "proj", "applications"},
-			want: "proj",
-		},
-		{
-			name: "multiple flags takes first",
-			args: []string{"nctl", "-p", "first", "get", "-p", "second"},
-			want: "first",
-		},
+	var grammar struct {
+		Verbose bool
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	parser, err := kong.New(&grammar)
+	is.NoError(err)
 
-			if got := findProjectInSlice(tt.args); got != tt.want {
-				t.Errorf("findProjectInSlice() = %q, want %q", got, tt.want)
-			}
-		})
+	project, incomplete := newProjectFinder(parser).find(complete.Args{
+		All:           []string{"get", "-p", "myproject"},
+		LastCompleted: "-p",
+	})
+	is.Empty(project, "a CLI without a project flag finds no project")
+	is.False(incomplete, "a CLI without a project flag has nothing to complete")
+
+	is.Empty(newProjectFinder(nil))
+}
+
+// testProjectFinder returns a finder for a project flag declared the same way
+// the CLI declares it.
+func testProjectFinder(t *testing.T) projectFinder {
+	t.Helper()
+
+	var grammar struct {
+		Project string `help:"Limit commands to a specific project." short:"p"`
 	}
+
+	parser, err := kong.New(&grammar)
+	require.NoError(t, err)
+
+	return newProjectFinder(parser)
 }

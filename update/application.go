@@ -27,14 +27,15 @@ const BuildTrigger = "BUILD_TRIGGER"
 // all fields need to be pointers so we can detect if they have been set by
 // the user.
 type applicationCmd struct {
-	resourceCmd
+	ResourceCmd
 	Git                     *gitConfig        `embed:"" prefix:"git-"`
 	FromLocalDir            *string           `help:"Path to a local directory to upload and deploy. The directory is zipped and uploaded to a one-time-use git repository. Sets --git-url to the returned URL." name:"from-local-dir" placeholder:"."`
 	Size                    *string           `help:"Size of the app."`
 	Port                    *int32            `help:"Port the app is listening on."`
 	HealthProbe             *healthProbe      `embed:"" prefix:"health-probe-"`
 	DeleteHealthProbe       *bool             `help:"Delete existing custom health probe."`
-	Replicas                *int32            `help:"Amount of replicas of the running app."`
+	Replicas                *int32            `help:"Amount of replicas of the running app." xor:"replicas"`
+	UnsetReplicas           *bool             `help:"Unset the replicas, deferring to other possible configuration layer values (.deploio.yaml, etc)." xor:"replicas"`
 	Hosts                   *[]string         `help:"Host names where the application can be accessed. If empty, the application will just be accessible on a generated host name on the deploio.app domain."`
 	BasicAuth               *bool             `help:"Enable/Disable basic authentication for the application."`
 	ChangeBasicAuthPassword *bool             `help:"Generate a new basic auth password."`
@@ -50,21 +51,23 @@ type applicationCmd struct {
 	// structs. Due to the usage of kong these pointers will never be `nil`.
 	// So checking for `nil` values can not be used to find out if some of
 	// the struct fields have been set.
-	DeployJob                *deployJob      `embed:"" prefix:"deploy-job-"`
-	WorkerJob                *workerJob      `embed:"" prefix:"worker-job-"`
-	ScheduledJob             *scheduledJob   `embed:"" prefix:"scheduled-job-"`
-	DeleteWorkerJob          *string         `help:"Delete a worker job by name."`
-	DeleteScheduledJob       *string         `help:"Delete a scheduled job by name."`
-	RetryRelease             *bool           `help:"Retries release for the application." placeholder:"false"`
-	RetryBuild               *bool           `help:"Retries build for the application if set to true." placeholder:"false"`
-	Pause                    *bool           `help:"Pauses the application if set to true. Stops all costs." placeholder:"false"`
-	GitInformationServiceURL string          `help:"URL of the git information service." default:"https://git-info.deplo.io" env:"GIT_INFORMATION_SERVICE_URL" hidden:""`
-	GitOnceURL               string          `help:"URL of the gitonce upload service." default:"${gitonce_default_url}" env:"GITONCE_URL" hidden:""`
-	SkipRepoAccessCheck      bool            `help:"Skip the git repository access check." default:"false"`
-	Debug                    bool            `help:"Enable debug messages." default:"false"`
-	Language                 *string         `help:"${app_language_help} Possible values: ${enum}" enum:"ruby,php,python,golang,nodejs,static,"`
-	DockerfileBuild          dockerfileBuild `embed:""`
-	BuildpackStack           *string         `help:"${app_buildpack_stack_help} Possible values: ${enum}" enum:"paketo,heroku,"`
+	DeployJob                *deployJob                          `embed:"" prefix:"deploy-job-"`
+	WorkerJob                *workerJob                          `embed:"" prefix:"worker-job-"`
+	ScheduledJob             *scheduledJob                       `embed:"" prefix:"scheduled-job-"`
+	DeleteWorkerJob          *string                             `help:"Delete a worker job by name."`
+	DeleteScheduledJob       *string                             `help:"Delete a scheduled job by name."`
+	Service                  []application.NamedServiceReference `sep:"none" help:"Service reference to add/update in the form name=kind/target-name. Repeat the flag to pass more than one service."`
+	DeleteService            []string                            `help:"Service reference names to remove."`
+	RetryRelease             *bool                               `help:"Retries release for the application." placeholder:"false"`
+	RetryBuild               *bool                               `help:"Retries build for the application if set to true." placeholder:"false"`
+	Pause                    *bool                               `negatable:"" help:"Pause or unpause the application. Pausing stops all costs."`
+	GitInformationServiceURL string                              `help:"URL of the git information service." default:"https://git-info.deplo.io" env:"GIT_INFORMATION_SERVICE_URL" hidden:""`
+	GitOnceURL               string                              `help:"URL of the gitonce upload service." default:"${gitonce_default_url}" env:"GITONCE_URL" hidden:""`
+	SkipRepoAccessCheck      bool                                `help:"Skip the git repository access check." default:"false"`
+	Debug                    bool                                `help:"Enable debug messages." default:"false"`
+	Language                 *string                             `help:"${app_language_help} Possible values: ${enum}" enum:"ruby,php,python,golang,nodejs,static,"`
+	DockerfileBuild          dockerfileBuild                     `embed:""`
+	BuildpackStack           *string                             `help:"${app_buildpack_stack_help} Possible values: ${enum}" enum:"paketo,heroku,"`
 }
 
 type gitConfig struct {
@@ -74,7 +77,7 @@ type gitConfig struct {
 	Username              *string `help:"Username to use when authenticating to the git repository over HTTPS." env:"GIT_USERNAME"`
 	Password              *string `help:"Password to use when authenticating to the git repository over HTTPS. In case of GitHub or GitLab, this can also be an access token." env:"GIT_PASSWORD"`
 	SSHPrivateKey         *string `help:"Private key in x509 format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY"`
-	SSHPrivateKeyFromFile *string `help:"Path to a file containing a private key in PEM format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY_FROM_FILE" xor:"SSH_KEY" completion-predictor:"file"`
+	SSHPrivateKeyFromFile *string `help:"Path to a file containing a private key in PEM format to connect to the git repository via SSH." env:"GIT_SSH_PRIVATE_KEY_FROM_FILE" xor:"SSH_KEY" completion-predictor:"local:file"`
 }
 
 func (g gitConfig) sshPrivateKey() (*string, error) {
@@ -125,13 +128,14 @@ type scheduledJob struct {
 	Command  *string        `help:"Command to execute to start the scheduled job." placeholder:"\"bundle exec rails runner\""`
 	Name     *string        `help:"Name of the scheduled job job to add." placeholder:"scheduled-1"`
 	Size     *string        `help:"Size (resources) of the scheduled job (defaults to \"${app_default_size}\")." placeholder:"${app_default_size}"`
-	Schedule *string        `help:"Cron notation string for the scheduled job (defaults to \"* * * * *\")." placeholder:"* * * * *"`
+	Schedule *string        `help:"Cron notation string for the scheduled job (defaults to \"* * * * *\")." placeholder:"\"* * * * *\""`
+	TimeZone *string        `help:"Time zone the schedule is evaluated in, e.g. \"Europe/Zurich\" (defaults to \"UTC\")." placeholder:"Europe/Zurich"`
 	Retries  *int32         `help:"How many times the job will be restarted on failure." placeholder:"${app_default_scheduled_job_retries}"`
 	Timeout  *time.Duration `help:"Timeout of the job." placeholder:"${app_default_scheduled_job_timeout}"`
 }
 
 func (job scheduledJob) changesGiven() bool {
-	return job.Command != nil || job.Size != nil || job.Schedule != nil
+	return job.Command != nil || job.Size != nil || job.Schedule != nil || job.TimeZone != nil || job.Retries != nil || job.Timeout != nil
 }
 
 type dockerfileBuild struct {
@@ -163,7 +167,8 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 		},
 	}
 
-	upd := cmd.newUpdater(client, app, apps.ApplicationKind, func(current resource.Managed) error {
+	var upd *updater
+	upd = cmd.newUpdater(client, app, apps.ApplicationKind, func(current resource.Managed) error {
 		app, ok := current.(*apps.Application)
 		if !ok {
 			return fmt.Errorf("resource is of type %T, expected %T", current, apps.Application{})
@@ -191,17 +196,13 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 			Password:      cmd.Git.Password,
 			SSHPrivateKey: sshPrivateKey,
 		}
+		userProvidedAuth := cmd.Git.Username != nil || cmd.Git.Password != nil ||
+			cmd.Git.SSHPrivateKey != nil || cmd.Git.SSHPrivateKeyFromFile != nil
 		if !cmd.SkipRepoAccessCheck {
 			gitClient, err := gitinfo.New(cmd.GitInformationServiceURL, client.Token(ctx))
 			if err != nil {
 				return err
 			}
-			validator := &application.RepositoryValidator{
-				Auth:   auth,
-				Client: gitClient,
-				Debug:  cmd.Debug,
-			}
-
 			if !auth.Enabled() {
 				// if the auth was not changed but e.g. the branch changes and
 				// auth is pre-configured, we need to fetch the existing git
@@ -211,6 +212,12 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 					return fmt.Errorf("error reading preconfigured auth secret: %w", err)
 				}
 				auth = a
+			}
+
+			validator := &application.RepositoryValidator{
+				Auth:   auth,
+				Client: gitClient,
+				Debug:  cmd.Debug,
 			}
 
 			app.Spec.ForProvider.Git.GitTarget, err = validator.Validate(ctx, app.Spec.ForProvider.Git.GitTarget)
@@ -227,7 +234,7 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 					if err := client.Create(ctx, secret); err != nil {
 						return err
 					}
-
+					upd.forceUpdate = true
 					return nil
 				}
 
@@ -237,6 +244,9 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 			auth.ApplyToSecret(secret)
 			if err := client.Update(ctx, secret); err != nil {
 				return err
+			}
+			if userProvidedAuth {
+				upd.forceUpdate = true
 			}
 		}
 
@@ -253,6 +263,8 @@ func (cmd *applicationCmd) Run(ctx context.Context, client *api.Client) error {
 }
 
 func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
+	// rebuildNeeded determines if a rebuild trigger should be added
+	rebuildNeeded := false
 	if cmd.Git != nil {
 		if cmd.Git.URL != nil {
 			app.Spec.ForProvider.Git.URL = *cmd.Git.URL
@@ -280,6 +292,9 @@ func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
 	if cmd.Replicas != nil {
 		app.Spec.ForProvider.Config.Replicas = cmd.Replicas
 	}
+	if cmd.UnsetReplicas != nil && *cmd.UnsetReplicas {
+		app.Spec.ForProvider.Config.Replicas = nil
+	}
 	if cmd.Hosts != nil {
 		app.Spec.ForProvider.Hosts = *cmd.Hosts
 	}
@@ -306,12 +321,12 @@ func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
 	}
 	if cmd.Language != nil {
 		app.Spec.ForProvider.Language = apps.Language(*cmd.Language)
+		rebuildNeeded = true
 	}
 
-	buildpackStackChanged := false
 	if cmd.BuildpackStack != nil && len(*cmd.BuildpackStack) != 0 {
 		app.Spec.ForProvider.BuildpackStack = apps.BuildpackStack(*cmd.BuildpackStack)
-		buildpackStackChanged = true
+		rebuildNeeded = true
 	}
 
 	runtimeEnv := cmd.Env
@@ -346,7 +361,7 @@ func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
 		sensitiveBuildEnv = make(map[string]string)
 	}
 
-	if (cmd.RetryBuild != nil && *cmd.RetryBuild) || buildpackStackChanged {
+	if (cmd.RetryBuild != nil && *cmd.RetryBuild) || rebuildNeeded {
 		buildEnv[BuildTrigger] = triggerTimestamp()
 	}
 
@@ -361,7 +376,7 @@ func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
 		sensitiveBuildEnv,
 		delBuildEnv,
 	)
-	if cmd.Pause != nil && *cmd.Pause {
+	if cmd.Pause != nil {
 		app.Spec.ForProvider.Paused = *cmd.Pause
 	}
 
@@ -373,6 +388,13 @@ func (cmd *applicationCmd) applyUpdates(app *apps.Application) {
 	if cmd.DockerfileBuild.BuildContext != nil {
 		app.Spec.ForProvider.DockerfileBuild.BuildContext = *cmd.DockerfileBuild.BuildContext
 		warnIfDockerfileNotEnabled(cmd.Writer, app, "build context")
+	}
+
+	if len(cmd.Service) > 0 || len(cmd.DeleteService) > 0 {
+		toAdd := application.ServicesFromReferences(cmd.Service, app.Namespace)
+		app.Spec.ForProvider.Services = application.UpdateServices(
+			app.Spec.ForProvider.Services, toAdd, cmd.DeleteService, cmd.Writer,
+		)
 	}
 }
 
@@ -491,11 +513,14 @@ func (job scheduledJob) applyUpdates(w format.Writer, cfg *apps.Config) {
 			if job.Schedule != nil {
 				cfg.ScheduledJobs[i].Schedule = *job.Schedule
 			}
+			if job.TimeZone != nil {
+				cfg.ScheduledJobs[i].TimeZone = *job.TimeZone
+			}
 			if job.Retries != nil {
-				cfg.DeployJob.Retries = job.Retries
+				cfg.ScheduledJobs[i].Retries = job.Retries
 			}
 			if job.Timeout != nil {
-				cfg.DeployJob.Timeout = &metav1.Duration{Duration: *job.Timeout}
+				cfg.ScheduledJobs[i].Timeout = &metav1.Duration{Duration: *job.Timeout}
 			}
 			return
 		}
@@ -507,6 +532,18 @@ func (job scheduledJob) applyUpdates(w format.Writer, cfg *apps.Config) {
 	}
 	if job.Size != nil {
 		newJob.Size = new(apps.ApplicationSize(*job.Size))
+	}
+	if job.TimeZone != nil {
+		newJob.TimeZone = *job.TimeZone
+	}
+	if job.Schedule != nil {
+		newJob.Schedule = *job.Schedule
+	}
+	if job.Retries != nil {
+		newJob.Retries = job.Retries
+	}
+	if job.Timeout != nil {
+		newJob.Timeout = &metav1.Duration{Duration: *job.Timeout}
 	}
 	cfg.ScheduledJobs = append(cfg.ScheduledJobs, newJob)
 }

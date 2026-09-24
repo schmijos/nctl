@@ -2,14 +2,10 @@ package create
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 
-	"github.com/alecthomas/kong"
 	runtimev1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	infra "github.com/ninech/apis/infrastructure/v1alpha1"
 	meta "github.com/ninech/apis/meta/v1alpha1"
@@ -19,34 +15,28 @@ import (
 )
 
 type postgresCmd struct {
-	resourceCmd
-	Location         meta.LocationName       `placeholder:"${postgres_location_default}" help:"Where the PostgreSQL instance is created. Available locations are: ${postgres_location_options}"`
-	MachineType      string                  `placeholder:"${postgres_machine_default}" help:"Defines the sizing for a particular PostgreSQL instance. Available types: ${postgres_machine_types}"`
-	AllowedCidrs     []meta.IPv4CIDR         `placeholder:"203.0.113.1/32" help:"IP addresses allowed to connect to the instance."`
-	SSHKeys          []storage.SSHKey        `help:"SSH public keys allowed to connect to the database server in order to up-/download and directly restore database backups."`
-	SSHKeysFile      *os.File                `completion-predictor:"file" help:"Path to a file containing a list of SSH public keys (see above), separated by newlines. Lines prefixed with # are ignored."`
-	PostgresVersion  storage.PostgresVersion `placeholder:"${postgres_version_default}" help:"Release version with which the PostgreSQL instance is created. Available versions: ${postgres_versions}"`
-	KeepDailyBackups *int                    `placeholder:"${postgres_backup_retention_days}" help:"Number of daily database backups to keep. Note that setting this to 0, backup will be disabled and existing dumps deleted immediately."`
+	ResourceCmd
+	Location             meta.LocationName `help:"Where the PostgreSQL instance is created." completion-predictor:"apifield:postgres_location"`
+	MachineType          string            `help:"Defines the sizing for a particular PostgreSQL instance." completion-predictor:"apifield:postgres_machine_type"`
+	AllowedCidrs         []meta.IPv4CIDR   `placeholder:"203.0.113.1/32" help:"IP addresses allowed to connect to the instance."`
+	DatabaseSSHKeysFlags `set:"ssh_keys_purpose=allowed to connect to the database server in order to up-/download and directly restore database backups"`
+	PostgresVersion      storage.PostgresVersion `help:"Release version with which the PostgreSQL instance is created." completion-predictor:"apifield:postgres_version"`
+	KeepDailyBackups     *int                    `help:"Number of daily database backups to keep. Note that setting this to 0, backup will be disabled and existing dumps deleted immediately." completion-predictor:"apifield:postgres_keep_daily_backups"`
 }
 
 func (cmd *postgresCmd) Run(ctx context.Context, client *api.Client) error {
-	if cmd.SSHKeysFile != nil {
-		defer cmd.SSHKeysFile.Close()
-
-		keys, err := ParseSSHKeys(cmd.SSHKeysFile)
-		if err != nil {
-			return err
-		}
-		cmd.SSHKeys = keys
+	postgres, err := cmd.newPostgres(client.Project)
+	if err != nil {
+		return err
 	}
-
-	postgres := cmd.newPostgres(client.Project)
 
 	c := cmd.newCreator(client, postgres, storage.PostgresKind)
 	ctx, cancel := context.WithTimeout(ctx, cmd.WaitTimeout)
 	defer cancel()
 
-	if err := c.createResource(ctx); err != nil {
+	if err := c.createResourceInLocation(ctx, cmd.Location, func(location meta.LocationName) {
+		postgres.Spec.ForProvider.Location = location
+	}); err != nil {
 		return err
 	}
 
@@ -66,8 +56,13 @@ func (cmd *postgresCmd) Run(ctx context.Context, client *api.Client) error {
 	})
 }
 
-func (cmd *postgresCmd) newPostgres(namespace string) *storage.Postgres {
+func (cmd *postgresCmd) newPostgres(namespace string) (*storage.Postgres, error) {
 	name := getName(cmd.Name)
+
+	sshKeys, err := cmd.StorageKeys(&cmd.Writer)
+	if err != nil {
+		return nil, err
+	}
 
 	postgres := &storage.Postgres{
 		ObjectMeta: metav1.ObjectMeta{
@@ -84,8 +79,8 @@ func (cmd *postgresCmd) newPostgres(namespace string) *storage.Postgres {
 			ForProvider: storage.PostgresParameters{
 				Location:         cmd.Location,
 				MachineType:      infra.NewMachineType(cmd.MachineType),
-				AllowedCIDRs:     []meta.IPv4CIDR{},  // avoid missing parameter error
-				SSHKeys:          []storage.SSHKey{}, // avoid missing parameter error
+				AllowedCIDRs:     []meta.IPv4CIDR{}, // avoid missing parameter error
+				SSHKeys:          sshKeys,
 				Version:          cmd.PostgresVersion,
 				KeepDailyBackups: cmd.KeepDailyBackups,
 			},
@@ -95,25 +90,6 @@ func (cmd *postgresCmd) newPostgres(namespace string) *storage.Postgres {
 	if cmd.AllowedCidrs != nil {
 		postgres.Spec.ForProvider.AllowedCIDRs = cmd.AllowedCidrs
 	}
-	if cmd.SSHKeys != nil {
-		postgres.Spec.ForProvider.SSHKeys = cmd.SSHKeys
-	}
 
-	return postgres
-}
-
-// PostgresKongVars returns all variables which are used in the Postgres
-// create command
-func PostgresKongVars() kong.Vars {
-	result := make(kong.Vars)
-	result["postgres_machine_types"] = strings.Join(stringerSlice(storage.PostgresMachineTypes), ", ")
-	result["postgres_machine_default"] = storage.PostgresMachineTypeDefault.String()
-	result["postgres_location_options"] = strings.Join(storage.PostgresLocationOptions, ", ")
-	result["postgres_location_default"] = string(storage.PostgresLocationDefault)
-	result["postgres_version_default"] = string(storage.PostgresVersionDefault)
-	result["postgres_versions"] = strings.Join(stringSlice(storage.PostgresVersions), ", ")
-	result["postgres_user"] = storage.PostgresUser
-	result["postgres_backup_retention_days"] = fmt.Sprintf("%d", storage.PostgresBackupRetentionDaysDefault)
-
-	return result
+	return postgres, nil
 }

@@ -21,10 +21,14 @@ type Cmd struct {
 }
 
 type resourceCmd struct {
-	Name string `arg:"" completion-predictor:"resource_name" help:"Name of the resource." default:""`
+	Name string `arg:"" completion-predictor:"client:resource_name" help:"Name of the resource." default:""`
 }
 
-type logsCmd struct {
+// LogsCmd is the shared base for the logs sub-commands.
+//
+// It has to be exported so that Kong initializes the embedded
+// [format.Writer], see [format.Writer.BeforeApply].
+type LogsCmd struct {
 	format.Writer `kong:"-"`
 	Follow        bool          `help:"Follow the logs by live tailing." short:"f"`
 	Lines         int           `help:"Amount of lines to output." default:"50" short:"l"`
@@ -37,7 +41,7 @@ type logsCmd struct {
 }
 
 // BeforeApply initializes Writer from Kong's bound [io.Writer].
-func (cmd *logsCmd) BeforeApply(writer io.Writer) error {
+func (cmd *LogsCmd) BeforeApply(writer io.Writer) error {
 	return cmd.Writer.BeforeApply(writer)
 }
 
@@ -45,7 +49,7 @@ func (cmd *logsCmd) BeforeApply(writer io.Writer) error {
 // deplo.io. We'll need to revisit this if we ever make this configurable.
 var logRetention = time.Duration(time.Hour * 24 * 30)
 
-func (cmd *logsCmd) Run(
+func (cmd *LogsCmd) Run(
 	ctx context.Context,
 	client *api.Client,
 	queryString string,
@@ -85,6 +89,10 @@ func (cmd *logsCmd) Run(
 	}
 
 	if cmd.Follow {
+		if err := client.Log.QueryRange(ctx, out, query); err != nil {
+			return err
+		}
+		query.Start = end
 		return client.Log.TailQuery(ctx, 0, out, query)
 	}
 

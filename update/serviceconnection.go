@@ -13,7 +13,7 @@ import (
 )
 
 type serviceConnectionCmd struct {
-	resourceCmd
+	ResourceCmd
 	KubernetesClusterOptions create.KubernetesClusterOptions `embed:"" prefix:"source-"`
 }
 
@@ -36,7 +36,9 @@ func (cmd *serviceConnectionCmd) Run(ctx context.Context, client *api.Client) er
 }
 
 func (cmd *serviceConnectionCmd) applyUpdates(sc *networking.ServiceConnection) error {
-	sc.Spec.ForProvider.Source.KubernetesClusterOptions = cmd.KubernetesClusterOptions.APIType()
+	if opts := cmd.KubernetesClusterOptions.APIType(); opts != nil {
+		sc.Spec.ForProvider.Source.KubernetesClusterOptions = opts
+	}
 
 	return nil
 }

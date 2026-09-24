@@ -7,17 +7,21 @@ import (
 
 	"github.com/ninech/nctl/api"
 	"github.com/ninech/nctl/internal/format"
-	"golang.org/x/exp/maps"
+	"maps"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type fromFile struct{}
+type fromFile struct {
+	format.Writer `hidden:""`
+	Filename      *os.File `short:"f" completion-predictor:"local:file"`
+}
 
-func (cmd *Cmd) Run(ctx context.Context, client *api.Client, apply *Cmd) error {
-	return File(ctx, cmd.Writer, client, apply.Filename, UpdateOnExists())
+func (cmd *fromFile) Run(ctx context.Context, client *api.Client) error {
+	return File(ctx, cmd.Writer, client, cmd.Filename, UpdateOnExists())
 }
 
 type Option func(*config)

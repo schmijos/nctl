@@ -12,7 +12,7 @@ import (
 )
 
 type bucketUserCmd struct {
-	resourceCmd
+	ResourceCmd
 	PrintCredentials bool `help:"Print the credentials of the BucketUser. Requires name to be set." xor:"cred"`
 	PrintAccessKey   bool `help:"Print the access key of the BucketUser. Requires name to be set." xor:"access"`
 	PrintSecretKey   bool `help:"Print the secret key of the BucketUser. Requires name to be set." xor:"secret"`
@@ -107,7 +107,7 @@ func (cmd *bucketUserCmd) printSecret(
 	key string,
 	out *output,
 ) error {
-	data, err := getConnectionSecret(ctx, client, key, user)
+	data, err := connectionSecret(ctx, client, key, user)
 	if err != nil {
 		return err
 	}

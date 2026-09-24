@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"github.com/alecthomas/kong"
 	runtimev1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	infrastructure "github.com/ninech/apis/infrastructure/v1alpha1"
 	meta "github.com/ninech/apis/meta/v1alpha1"
@@ -19,19 +17,21 @@ import (
 )
 
 type cloudVMCmd struct {
-	resourceCmd
+	ResourceCmd
 	Location            meta.LocationName                       `default:"nine-es34" help:"Where the CloudVM instance is created."`
 	MachineType         string                                  `default:"" help:"Defines the sizing for a particular CloudVM."`
 	Hostname            string                                  `default:"" help:"Configures the hostname explicitly. If unset, the name of the resource will be used as the hostname. This does not affect the DNS name."`
 	ReverseDNS          string                                  `default:"" help:"Configures the reverse DNS of the CloudVM."`
 	PowerState          infrastructure.VirtualMachinePowerState `default:"on" help:"Specify the initial power state of the CloudVM. Set to off to not start the VM after creation."`
-	OS                  infrastructure.OperatingSystem          `default:"" help:"Operating system to use to boot the VM. Available options: ${cloudvm_os_flavors}"`
+	OS                  infrastructure.OperatingSystem          `default:"" help:"Operating system to use to boot the VM." completion-predictor:"apifield:cloudvm_os"`
 	BootDiskSize        *resource.Quantity                      `default:"20Gi" help:"Configures the size of the boot disk."`
 	Disks               map[string]resource.Quantity            `default:"" help:"Additional disks to mount to the machine."`
-	PublicKeys          []string                                `default:"" help:"SSH public keys to connect to the CloudVM as root. The keys are expected to be in SSH format as defined in RFC4253. Immutable after creation."`
-	PublicKeysFromFiles []*os.File                              `default:"" completion-predictor:"file" help:"SSH public key files to connect to the VM as root. The keys are expected to be in SSH format as defined in RFC4253. Immutable after creation."`
-	CloudConfig         string                                  `default:"" help:"Pass custom cloud config data (https://cloudinit.readthedocs.io/en/latest/topics/format.html#cloud-config-data) to the cloud VM. If a CloudConfig is passed, the PublicKey parameter is ignored. Immutable after creation."`
-	CloudConfigFromFile *os.File                                `default:"" completion-predictor:"file" help:"Pass custom cloud config data (https://cloudinit.readthedocs.io/en/latest/topics/format.html#cloud-config-data) from a file. Takes precedence. If a CloudConfig is passed, the PublicKey parameter is ignored. Immutable after creation."`
+	SSHKeysFlags        `set:"ssh_keys_purpose=to connect to the CloudVM as root. Immutable after creation"`
+	CloudConfig         string   `default:"" help:"Pass custom cloud config data (https://cloudinit.readthedocs.io/en/latest/topics/format.html#cloud-config-data) to the cloud VM. If a cloud config is passed, --ssh-keys and --ssh-keys-from-files are ignored. Immutable after creation."`
+	CloudConfigFromFile *os.File `completion-predictor:"local:file" help:"Pass custom cloud config data (https://cloudinit.readthedocs.io/en/latest/topics/format.html#cloud-config-data) from a file. Takes precedence over --cloud-config. If a cloud config is passed, --ssh-keys and --ssh-keys-from-files are ignored. Immutable after creation."`
+
+	// Deprecated Flags
+	DeprecatedKeysFlags `prefix:"public-"`
 }
 
 func (cmd *cloudVMCmd) Run(ctx context.Context, client *api.Client) error {
@@ -61,8 +61,7 @@ func (cmd *cloudVMCmd) Run(ctx context.Context, client *api.Client) error {
 			}
 			return false, nil
 		},
-	},
-	); err != nil {
+	}); err != nil {
 		return err
 	}
 
@@ -73,6 +72,11 @@ func (cmd *cloudVMCmd) Run(ctx context.Context, client *api.Client) error {
 
 func (cmd *cloudVMCmd) newCloudVM(namespace string) (*infrastructure.CloudVirtualMachine, error) {
 	name := getName(cmd.Name)
+
+	publicKeys, err := cmd.publicKeys()
+	if err != nil {
+		return nil, err
+	}
 
 	cloudVM := &infrastructure.CloudVirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{
@@ -92,28 +96,11 @@ func (cmd *cloudVMCmd) newCloudVM(namespace string) (*infrastructure.CloudVirtua
 				Hostname:    cmd.Hostname,
 				PowerState:  cmd.PowerState,
 				OS:          infrastructure.CloudVirtualMachineOS(cmd.OS),
-				PublicKeys:  cmd.PublicKeys,
+				PublicKeys:  publicKeys,
 				CloudConfig: cmd.CloudConfig,
 				ReverseDNS:  cmd.ReverseDNS,
 			},
 		},
-	}
-
-	if len(cmd.PublicKeysFromFiles) != 0 {
-		cloudVM.Spec.ForProvider.PublicKeys = cmd.PublicKeys
-		var keys []string
-		for _, file := range cmd.PublicKeysFromFiles {
-			if file == nil {
-				continue
-			}
-
-			b, err := io.ReadAll(file)
-			if err != nil {
-				return nil, fmt.Errorf("error reading public keys file: %w", err)
-			}
-			keys = append(keys, string(b))
-		}
-		cloudVM.Spec.ForProvider.PublicKeys = keys
 	}
 
 	if cmd.CloudConfigFromFile != nil {
@@ -139,11 +126,19 @@ func (cmd *cloudVMCmd) newCloudVM(namespace string) (*infrastructure.CloudVirtua
 	return cloudVM, nil
 }
 
-// CloudVMKongVars returns all variables which are used in the application
-// create command.
-func CloudVMKongVars() kong.Vars {
-	result := make(kong.Vars)
-	result["cloudvm_os_flavors"] = strings.Join(stringSlice(infrastructure.CloudVirtualMachineOperatingSystems), ", ")
+// publicKeys returns the validated SSH public keys of --ssh-keys and
+// --ssh-keys-from-files, followed by those of the deprecated --public-keys and
+// --public-keys-from-files, in that order.
+func (cmd *cloudVMCmd) publicKeys() ([]string, error) {
+	keys, err := cmd.SSHKeysFlags.Keys(&cmd.Writer, "")
+	if err != nil {
+		return nil, err
+	}
 
-	return result
+	deprecated, err := cmd.DeprecatedKeysFlags.Keys(&cmd.Writer, "public-", "")
+	if err != nil {
+		return nil, err
+	}
+
+	return append(keys, deprecated...), nil
 }
